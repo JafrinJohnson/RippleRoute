@@ -141,12 +141,18 @@ function createVehicleDivIcon(vehicle, isSelected) {
     </div>
   `;
 
+  const isAtDepot =
+    typeof vehicle.lat === "number" &&
+    typeof vehicle.lng === "number" &&
+    Math.abs(vehicle.lat - 11.0270) < 0.0015 &&
+    Math.abs(vehicle.lng - 77.0100) < 0.0015;
+
   return L.divIcon({
     className: "ripple-vehicle-divicon",
     html,
     iconSize: [110, 32],
-    iconAnchor: [55, 16],
-    popupAnchor: [0, -18],
+    iconAnchor: isAtDepot ? [55, 44] : [55, 16],
+    popupAnchor: isAtDepot ? [0, -46] : [0, -18],
   });
 }
 
@@ -855,7 +861,7 @@ export default function FleetMap({
                 pathOptions={{
                   color: routeColor,
                   weight: isHighlighted ? 5 : 3.5,
-                  opacity: isHighlighted ? 0.95 : 0.75,
+                  opacity: route.opacity !== undefined ? route.opacity : (isHighlighted ? 0.95 : 0.75),
                   dashArray: isDashed ? "6, 8" : undefined,
                   lineCap: "round",
                   lineJoin: "round",

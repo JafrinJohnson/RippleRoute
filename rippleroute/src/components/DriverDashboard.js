@@ -24,6 +24,7 @@ import {
   subscribeMessages,
 } from "@/services/api";
 import { haversineMeters, minDistanceToPolylineMeters } from "@/lib/geo";
+import { routeCost } from "@/lib/routeCost";
 import { buildPath, pointAtDistance } from "@/lib/routeAnimator";
 import useRouteMover from "@/hooks/useRouteMover";
 import {
@@ -581,9 +582,15 @@ export default function DriverDashboard({ mode = "driver" }) {
 
       setQarsResult(res);
 
+      if (Array.isArray(res.candidates) && res.candidates.length > 0) {
+        setPlannedRoutes(res.candidates);
+        plannedRoutesRef.current = res.candidates;
+      }
+
       // Find index of best route and set route bounds to fit map view
       if (res.best) {
-        const bestIdx = currentRoutes.findIndex((r) => r.id === res.best.id);
+        const candidateList = (Array.isArray(res.candidates) && res.candidates.length > 0) ? res.candidates : currentRoutes;
+        const bestIdx = candidateList.findIndex((r) => r.id === res.best.id);
         if (bestIdx !== -1) {
           setSelectedRouteIndex(bestIdx);
         }
@@ -894,6 +901,7 @@ export default function DriverDashboard({ mode = "driver" }) {
           remainingCoords: isBest ? mover.remainingCoords : undefined,
           color: isBest ? (isEmergency ? "#EF4444" : "#00E5FF") : ROUTE_COLORS[idx % ROUTE_COLORS.length],
           isHighlighted: isBest,
+          opacity: isBest ? 0.95 : 0.25,
           isDashed: true,
           snappedStart: r.snappedStart,
           snappedEnd: r.snappedEnd,
@@ -1459,11 +1467,9 @@ export default function DriverDashboard({ mode = "driver" }) {
                     ? "border-purple-400 bg-purple-500/20 shadow-md shadow-purple-500/20"
                     : "border-amber-400 bg-amber-500/20 shadow-md shadow-amber-500/20";
 
-                  // Count hazards touching this candidate
-                  const hitCount = hazards.filter((h) => {
-                    if (!h.active) return false;
-                    return minDistanceToPolylineMeters({ lat: h.lat, lng: h.lng }, route.coords) <= ((h.radiusM || 300) + 150);
-                  }).length;
+                  // Count hazards touching this candidate using routeCost so cards and QARS always agree
+                  const costData = routeCost(route, hazards, [], selectedDelivery?.priority);
+                  const hitCount = costData.hits.length;
 
                   return (
                     <button
@@ -1485,7 +1491,7 @@ export default function DriverDashboard({ mode = "driver" }) {
                             style={{ backgroundColor: routeColor }}
                           />
                           <span className="text-[11px] font-bold text-white font-mono">
-                            Route {String.fromCharCode(65 + idx)}
+                            {route.label || `Route ${String.fromCharCode(65 + idx)}`}
                           </span>
                         </div>
                         {hitCount > 0 ? (
@@ -1530,58 +1536,89 @@ export default function DriverDashboard({ mode = "driver" }) {
 
             {/* QARS Result Card with Sparkline */}
             {qarsResult && (
-              <div className={`p-4 rounded-2xl bg-white/[0.04] border ${accentBorder} relative overflow-hidden`}>
-                <div className="flex items-center justify-between mb-2">
+              <div className={`p-4 rounded-2xl bg-white/[0.04] border ${accentBorder} relative overflow-hidden flex flex-col gap-2.5`}>
+                <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                    <span className="text-xs font-bold text-white uppercase tracking-wider">
-                      Best Route Selected
-                    </span>
-                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-slate-300 border border-white/10">
-                      Road data: OSM
+                    <span className="text-xs font-bold text-white tracking-wide">
+                      Best route: {qarsResult.best?.label || "Route A"}
                     </span>
                   </div>
-                  <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">
-                    Save {qarsResult.timeSavedMin} min
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-slate-300 border border-white/10">
+                    Road data: OSM
                   </span>
                 </div>
 
-
-                <div className="grid grid-cols-2 gap-2 text-xs font-mono text-slate-300 mb-3">
-                  <div>
-                    <span className="text-[10px] text-slate-400 block">Estimated Travel</span>
-                    <span className="text-sm font-bold text-white">
-                      {Math.round((qarsResult.best?.durationS || 0) / 60)} min
+                <div className="grid grid-cols-2 gap-2 text-xs font-mono text-slate-300">
+                  <div className="p-2.5 rounded-xl bg-white/[0.03] border border-white/5">
+                    <span className="text-[10px] text-slate-400 block font-sans">ETA</span>
+                    <span className="text-base font-extrabold text-white">
+                      {Math.round(qarsResult.best?.etaMin || (qarsResult.best?.durationS || 0) / 60)} min
                     </span>
                   </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 block">Hazards Avoided</span>
-                    <span className="text-sm font-bold text-emerald-400">
-                      {qarsResult.baselineDelayMin > qarsResult.bestDelayMin ? "100% Cleared" : "Direct Pass"}
+                  <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                    <span className="text-[10px] text-emerald-400 block font-sans font-medium">Comparison</span>
+                    <span className="text-xs font-bold text-emerald-300 block mt-0.5">
+                      Time saved: {qarsResult.timeSavedMin} min vs fastest-looking route
                     </span>
                   </div>
                 </div>
 
-                {/* SVG Convergence Sparkline */}
-                {sparklinePoints && (
-                  <div className="mt-2 pt-2 border-t border-white/10">
-                    <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mb-1">
-                      <span>Quantum Swarm Fitness</span>
-                      <span className="text-cyan-400">40 Iterations</span>
+                {/* Hazards avoided list */}
+                {(() => {
+                  const bestHits = qarsResult.best?.hits || [];
+                  const bestHitSet = new Set(bestHits.map((h) => h.hazardId || h.type));
+                  const allActive = (hazards || []).filter((h) => h && h.active !== false);
+                  const avoided = allActive.filter((h) => !bestHitSet.has(h.id) && !bestHitSet.has(h.type));
+
+                  return (
+                    <div className="text-xs">
+                      <span className="text-[10px] text-slate-400 block font-mono uppercase tracking-wider mb-1">
+                        Hazards avoided ({avoided.length}):
+                      </span>
+                      {avoided.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {avoided.map((h, i) => (
+                            <span
+                              key={h.id || i}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/25 text-[11px] text-emerald-300 font-mono"
+                            >
+                              <CheckCircle className="w-3 h-3 text-emerald-400 flex-shrink-0" />
+                              <span>{h.note || h.type || "Hazard"}</span>
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="text-[11px] text-slate-400 font-mono">
+                          {bestHits.length > 0 ? "Minimal corridor impact" : "0 hazards along route corridor"}
+                        </span>
+                      )}
                     </div>
-                    <svg viewBox="0 0 150 36" className="w-full h-9 overflow-visible">
-                      <polygon points={sparklinePoints.area} fill="rgba(0, 229, 255, 0.15)" />
-                      <polyline
-                        fill="none"
-                        stroke="#00E5FF"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        points={sparklinePoints.points}
-                      />
-                    </svg>
+                  );
+                })()}
+
+                {/* Engine Telemetry & SVG Convergence Sparkline */}
+                <div className="mt-1 pt-2 border-t border-white/10 flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono">
+                    <span className="text-cyan-300 font-medium">Engine: QPSO · 30 particles · 60 iterations</span>
+                    <span className="text-slate-400">{qarsResult.convergence?.length || 60} gens</span>
                   </div>
-                )}
+                  {sparklinePoints && (
+                    <div className="relative">
+                      <svg viewBox="0 0 150 36" className="w-full h-9 overflow-visible">
+                        <polygon points={sparklinePoints.area} fill={isEmergency ? "rgba(239, 68, 68, 0.15)" : "rgba(0, 229, 255, 0.15)"} />
+                        <polyline
+                          fill="none"
+                          stroke={isEmergency ? "#EF4444" : "#00E5FF"}
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          points={sparklinePoints.points}
+                        />
+                      </svg>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

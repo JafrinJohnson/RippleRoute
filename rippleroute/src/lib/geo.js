@@ -6,7 +6,7 @@
  * Normalizes input to { lat, lng }
  * Accepts [lat, lng] or { lat, lng }
  */
-function toLatLng(p) {
+export function toLatLng(p) {
   if (!p) return null;
   if (Array.isArray(p)) {
     return { lat: Number(p[0]), lng: Number(p[1]) };
@@ -42,6 +42,41 @@ export function haversineMeters(p1, p2) {
 }
 
 /**
+ * Calculate distance in meters from point p to line segment between a and b
+ * @param {[number, number] | {lat: number, lng: number}} p
+ * @param {[number, number] | {lat: number, lng: number}} a
+ * @param {[number, number] | {lat: number, lng: number}} b
+ * @returns {number} distance in meters
+ */
+export function pointToSegmentMeters(p, a, b) {
+  const pt = toLatLng(p);
+  const ptA = toLatLng(a);
+  const ptB = toLatLng(b);
+  if (!pt || !ptA || !ptB) return Infinity;
+
+  const latFactor = 111139;
+  const midLatRad = (((ptA.lat + ptB.lat) / 2) * Math.PI) / 180;
+  const lngFactor = 111139 * Math.cos(midLatRad);
+
+  const dx = (ptB.lng - ptA.lng) * lngFactor;
+  const dy = (ptB.lat - ptA.lat) * latFactor;
+  const segLenSq = dx * dx + dy * dy;
+
+  if (segLenSq === 0) {
+    return haversineMeters(pt, ptA);
+  }
+
+  const px = (pt.lng - ptA.lng) * lngFactor;
+  const py = (pt.lat - ptA.lat) * latFactor;
+
+  const t = Math.max(0, Math.min(1, (px * dx + py * dy) / segLenSq));
+  const closestLat = ptA.lat + t * (ptB.lat - ptA.lat);
+  const closestLng = ptA.lng + t * (ptB.lng - ptA.lng);
+
+  return haversineMeters(pt, { lat: closestLat, lng: closestLng });
+}
+
+/**
  * Calculate the minimum distance in meters from a point to a polyline
  * @param {[number, number] | {lat: number, lng: number}} point
  * @param {Array<[number, number] | {lat: number, lng: number}>} polyline
@@ -58,45 +93,81 @@ export function minDistanceToPolylineMeters(point, polyline) {
   }
 
   let minDist = Infinity;
-
-  // Local meters conversion constant per degree lat ~ 111,139 m
-  const latFactor = 111139;
-
   for (let i = 0; i < polyline.length - 1; i++) {
-    const a = toLatLng(polyline[i]);
-    const b = toLatLng(polyline[i + 1]);
-    if (!a || !b) continue;
-
-    const midLatRad = ((a.lat + b.lat) / 2 * Math.PI) / 180;
-    const lngFactor = 111139 * Math.cos(midLatRad);
-
-    // Coordinate offsets in meters
-    const dx = (b.lng - a.lng) * lngFactor;
-    const dy = (b.lat - a.lat) * latFactor;
-    const segLenSq = dx * dx + dy * dy;
-
-    if (segLenSq === 0) {
-      const d = haversineMeters(pt, a);
-      if (d < minDist) minDist = d;
-      continue;
-    }
-
-    // Vector from A to P in meters
-    const px = (pt.lng - a.lng) * lngFactor;
-    const py = (pt.lat - a.lat) * latFactor;
-
-    // Project point onto line segment clamped to [0, 1]
-    const t = Math.max(0, Math.min(1, (px * dx + py * dy) / segLenSq));
-
-    // Closest point in lat/lng
-    const closestLat = a.lat + t * (b.lat - a.lat);
-    const closestLng = a.lng + t * (b.lng - a.lng);
-
-    const dist = haversineMeters(pt, { lat: closestLat, lng: closestLng });
-    if (dist < minDist) {
-      minDist = dist;
+    const d = pointToSegmentMeters(pt, polyline[i], polyline[i + 1]);
+    if (d < minDist) {
+      minDist = d;
     }
   }
 
   return Math.round(minDist);
+}
+
+/**
+ * Calculate the total cumulative length of a polyline in meters
+ * @param {Array<[number, number] | {lat: number, lng: number}>} coords
+ * @returns {number} total length in meters
+ */
+export function polylineLengthMeters(coords) {
+  if (!Array.isArray(coords) || coords.length < 2) return 0;
+  let total = 0;
+  for (let i = 0; i < coords.length - 1; i++) {
+    total += haversineMeters(coords[i], coords[i + 1]);
+  }
+  return Math.round(total);
+}
+
+/**
+ * Evenly sample n points along a polyline by cumulative path distance
+ * @param {Array<[number, number] | {lat: number, lng: number}>} coords
+ * @param {number} n
+ * @returns {Array<{lat: number, lng: number}>}
+ */
+export function samplePolyline(coords, n = 5) {
+  if (!Array.isArray(coords) || coords.length === 0 || n <= 0) return [];
+  const normalized = coords.map(toLatLng).filter(Boolean);
+  if (normalized.length === 0) return [];
+  if (normalized.length <= n) return normalized;
+  if (n === 1) return [normalized[0]];
+
+  // Build cumulative distances array
+  const cumDists = [0];
+  for (let i = 0; i < normalized.length - 1; i++) {
+    const d = haversineMeters(normalized[i], normalized[i + 1]);
+    cumDists.push(cumDists[i] + d);
+  }
+
+  const totalDist = cumDists[cumDists.length - 1];
+  if (totalDist === 0) {
+    return Array(n).fill(normalized[0]);
+  }
+
+  const step = totalDist / (n - 1);
+  const samples = [];
+  let segIdx = 0;
+
+  for (let k = 0; k < n; k++) {
+    const targetDist = k * step;
+    while (segIdx < cumDists.length - 2 && cumDists[segIdx + 1] < targetDist) {
+      segIdx++;
+    }
+
+    const segStartDist = cumDists[segIdx];
+    const segEndDist = cumDists[segIdx + 1];
+    const segSpan = segEndDist - segStartDist;
+
+    if (segSpan === 0) {
+      samples.push(normalized[segIdx]);
+    } else {
+      const t = Math.max(0, Math.min(1, (targetDist - segStartDist) / segSpan));
+      const p1 = normalized[segIdx];
+      const p2 = normalized[segIdx + 1];
+      samples.push({
+        lat: Number((p1.lat + t * (p2.lat - p1.lat)).toFixed(6)),
+        lng: Number((p1.lng + t * (p2.lng - p1.lng)).toFixed(6)),
+      });
+    }
+  }
+
+  return samples;
 }
