@@ -202,23 +202,47 @@ export default function Navbar({ onOpenAuthModal, onQuickAction }) {
             </button>
 
             {/* Auth Action Buttons */}
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onOpenAuthModal?.("login")}
-              className="hidden md:inline-flex"
-            >
-              {t("nav_login")}
-            </Button>
-
-            <Button
-              variant="primary"
-              size="sm"
-              iconRight={ArrowRight}
-              onClick={() => onOpenAuthModal?.("signup")}
-            >
-              {t("nav_get_started")}
-            </Button>
+            {onOpenAuthModal ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onOpenAuthModal("login")}
+                  className="hidden md:inline-flex"
+                >
+                  {t("nav_login")}
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  iconRight={ArrowRight}
+                  onClick={() => onOpenAuthModal("signup")}
+                >
+                  {t("nav_get_started")}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Link href="/login">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="hidden md:inline-flex"
+                  >
+                    {t("nav_login")}
+                  </Button>
+                </Link>
+                <Link href="/signup">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    iconRight={ArrowRight}
+                  >
+                    {t("nav_get_started")}
+                  </Button>
+                </Link>
+              </>
+            )}
           </div>
 
           {/* Mobile Hamburger Button */}
@@ -304,26 +328,43 @@ export default function Navbar({ onOpenAuthModal, onQuickAction }) {
             </div>
 
             <div className="grid grid-cols-2 gap-2 pt-2">
-              <Button
-                variant="secondary"
-                size="md"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  onOpenAuthModal?.("login");
-                }}
-              >
-                {t("nav_login")}
-              </Button>
-              <Button
-                variant="primary"
-                size="md"
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  onOpenAuthModal?.("signup");
-                }}
-              >
-                {t("nav_get_started")}
-              </Button>
+              {onOpenAuthModal ? (
+                <>
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      onOpenAuthModal("login");
+                    }}
+                  >
+                    {t("nav_login")}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="md"
+                    onClick={() => {
+                      setMobileMenuOpen(false);
+                      onOpenAuthModal("signup");
+                    }}
+                  >
+                    {t("nav_get_started")}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Link href="/login" onClick={() => setMobileMenuOpen(false)}>
+                    <Button variant="secondary" size="md" className="w-full">
+                      {t("nav_login")}
+                    </Button>
+                  </Link>
+                  <Link href="/signup" onClick={() => setMobileMenuOpen(false)}>
+                    <Button variant="primary" size="md" className="w-full">
+                      {t("nav_get_started")}
+                    </Button>
+                  </Link>
+                </>
+              )}
             </div>
           </div>
         </div>

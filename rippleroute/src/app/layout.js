@@ -1,9 +1,6 @@
 import { Space_Grotesk, Inter, Noto_Sans_Tamil } from "next/font/google";
 import "./globals.css";
-import { ThemeProvider } from "@/context/ThemeContext";
-import { LanguageProvider } from "@/context/LanguageContext";
-import { ToastProvider } from "@/context/ToastContext";
-import { AuthProvider } from "@/context/AuthContext";
+import Providers from "@/components/Providers";
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -53,14 +50,8 @@ export default function RootLayout({ children }) {
         {/* Subtle Noise Grain Overlay */}
         <div className="ambient-noise" aria-hidden="true" />
 
-        {/* Core Providers Cascade */}
-        <ThemeProvider>
-          <LanguageProvider>
-            <ToastProvider>
-              <AuthProvider>{children}</AuthProvider>
-            </ToastProvider>
-          </LanguageProvider>
-        </ThemeProvider>
+        {/* Core Client Providers Cascade */}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
