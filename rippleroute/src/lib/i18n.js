@@ -175,6 +175,18 @@ export const translations = {
     val_phone_len: "Phone number must be 10 digits",
     val_required: "This field is required",
 
+    // Auth & Firebase Error Keys
+    "auth/email-already-in-use": "This Gmail address is already registered. Please log in.",
+    "auth/invalid-credential": "Invalid credentials. Please verify your username/Gmail and password.",
+    "auth/wrong-password": "Incorrect password. Please verify your credentials.",
+    "auth/user-not-found": "No registered account found with these credentials.",
+    "auth/weak-password": "Password is too weak. Please use at least 6 characters.",
+    "auth/network-request-failed": "Network error. Please check your internet connection.",
+    "auth/too-many-requests": "Too many failed attempts. Please wait a moment and try again.",
+    "permission-denied": "Permission denied. Insufficient operational clearance.",
+    usernameTaken: "Username is already taken. Please choose another.",
+    userNotFound: "No account found matching this username or Gmail.",
+
     // Engine: QARS
     qars_title: "QARS Optimization Engine",
     qars_fullname: "Quantum-inspired Adaptive Route Swarm (QPSO)",
@@ -411,6 +423,18 @@ export const translations = {
     val_pass_match: "கடவுச்சொற்கள் பொருந்தவில்லை",
     val_phone_len: "தொலைபேசி எண் 10 இலக்கங்களாக இருக்க வேண்டும்",
     val_required: "இந்த புலம் கட்டாயமாகும்",
+
+    // Auth & Firebase Error Keys
+    "auth/email-already-in-use": "இந்த மின்னஞ்சல் முகவரி ஏற்கனவே பதிவு செய்யப்பட்டுள்ளது. உள்நுழையவும்.",
+    "auth/invalid-credential": "தவறான விவரங்கள். பயனர் பெயர் மற்றும் கடவுச்சொல்லை சரிபார்க்கவும்.",
+    "auth/wrong-password": "தவறான கடவுச்சொல். உங்கள் விவரங்களை சரிபார்க்கவும்.",
+    "auth/user-not-found": "இந்த விவரங்களுடன் எந்த கணக்கும் காணப்படவில்லை.",
+    "auth/weak-password": "கடவுச்சொல் குறைந்தது 6 எழுத்துக்களாக இருக்க வேண்டும்.",
+    "auth/network-request-failed": "நெட்வொர்க் பிழை. உங்கள் இணைய இணைப்பை சரிபார்க்கவும்.",
+    "auth/too-many-requests": "அதிக தோல்வி முயற்சிகள். சிறிது நேரம் கழித்து மீண்டும் முயற்சிக்கவும்.",
+    "permission-denied": "அனுமதி மறுக்கப்பட்டது. பாதுகாப்பு அனுமதி இல்லை.",
+    usernameTaken: "இந்த பயனர் பெயர் ஏற்கனவே பயன்பாட்டில் உள்ளது. வேறொன்றை தேர்வு செய்யவும்.",
+    userNotFound: "இந்த பயனர் பெயரில் எந்த கணக்கும் காணப்படவில்லை.",
 
     // Engine: QARS
     qars_title: "QARS உகந்த வழித்தட இயந்திரம்",

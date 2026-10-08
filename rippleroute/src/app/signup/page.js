@@ -214,10 +214,12 @@ function SignupFormContent() {
           : "/emergency";
       router.push(destination);
     } else {
+      const rawError = res?.error || "Registration Failed";
+      const displayError = t(rawError) || rawError;
       toast({
         type: "danger",
-        title: "Registration Failed",
-        description: res?.error || "Could not register account.",
+        title: isTamil ? "பதிவு தோல்வியடைந்தது" : "Registration Failed",
+        description: displayError,
       });
     }
   };

@@ -1,105 +1,101 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { isFirebaseConfigured, auth, db } from "@/lib/firebase";
+import {
+  onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signOut,
+} from "firebase/auth";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  deleteDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+import {
+  getMockSession,
+  mockSignup,
+  mockLogin,
+  mockLoginDemo,
+  mockLogout,
+  DEMO_PROFILES,
+} from "@/services/mockAuth";
 
-const SESSION_KEY = "rippleroute_auth_session";
-const USERS_KEY = "rippleroute_mock_users";
-
-// Default pre-seeded accounts for effortless testing and demo evaluations
-const SEED_USERS = [
-  {
-    uid: "usr-admin-01",
-    role: "admin",
-    name: "Selvi Ramasamy",
-    username: "admin01",
-    email: "admin01@gmail.com",
-    password: "password123",
-    companyId: "KS-COV-99",
-    department: "Logistics Team",
-    phone: "9842100001",
-    driverId: "",
-    vehicleNumber: "",
-    priority: "",
-  },
-  {
-    uid: "usr-driver-01",
-    role: "driver",
-    name: "Karthik Raja",
-    username: "drive01",
-    email: "driver1@gmail.com",
-    password: "password123",
-    companyId: "KS-COV-99",
-    department: "Delivery Team",
-    phone: "9842123011",
-    driverId: "DRV-3801",
-    vehicleNumber: "TN 38 AB 1234",
-    priority: "",
-  },
-  {
-    uid: "usr-emg-01",
-    role: "emergency",
-    name: "Praveen Kumar",
-    username: "emerg01",
-    email: "emerg01@gmail.com",
-    password: "password123",
-    companyId: "KS-COV-99",
-    department: "Logistics Team",
-    phone: "9842188402",
-    driverId: "EMG-9014",
-    vehicleNumber: "TN 38 AL 9014",
-    priority: "Medical – oxygen/medicines",
-  },
-];
-
-const DEMO_PROFILES = {
+// Demo profile configurations for Firebase
+const DEMO_FIREBASE_PROFILES = {
   admin: {
-    uid: "demo-admin-01",
     role: "admin",
     name: "Kavya S",
-    username: "kavya_admin",
-    email: "kavya@kovaiswift.com",
+    username: "kavyaad",
+    email: "demo.admin@rippleroute.app",
     companyId: "KS-CBE-01",
     department: "Logistics Team",
-    phone: "9842100001",
+    phone: "+919842100001",
     driverId: "",
     vehicleNumber: "",
     priority: "",
     isDemo: true,
   },
   driver: {
-    uid: "demo-driver-01",
     role: "driver",
     name: "Murugan K",
-    username: "murugan_driver",
-    email: "murugan@kovaiswift.com",
+    username: "murugan",
+    email: "demo.driver@rippleroute.app",
     companyId: "KS-CBE-01",
     department: "Delivery Team",
-    phone: "9842104521",
+    phone: "+919842104521",
     driverId: "DRV-4521",
     vehicleNumber: "TN 38 BX 4521",
     priority: "",
     isDemo: true,
   },
   emergency: {
-    uid: "demo-emg-01",
     role: "emergency",
     name: "Priya R",
-    username: "priya_emergency",
-    email: "priya@kovaiswift.com",
+    username: "priyar1",
+    email: "demo.emergency@rippleroute.app",
     companyId: "KS-CBE-01",
     department: "Emergency Medical Fleet",
-    phone: "9842107790",
+    phone: "+919842107790",
     driverId: "EMG-7790",
     vehicleNumber: "TN 38 AZ 7790",
-    priority: "Medical – oxygen",
-    cargoType: "Medical – oxygen",
+    priority: "medical",
     isDemo: true,
   },
 };
 
-const sleep = (ms = 600) => new Promise((resolve) => setTimeout(resolve, ms));
+function mapFirebaseError(code) {
+  if (!code) return "auth/invalid-credential";
+  switch (code) {
+    case "auth/email-already-in-use":
+      return "auth/email-already-in-use";
+    case "auth/invalid-credential":
+    case "auth/invalid-login-credentials":
+      return "auth/invalid-credential";
+    case "auth/wrong-password":
+      return "auth/wrong-password";
+    case "auth/user-not-found":
+      return "auth/user-not-found";
+    case "auth/weak-password":
+      return "auth/weak-password";
+    case "auth/network-request-failed":
+      return "auth/network-request-failed";
+    case "auth/too-many-requests":
+      return "auth/too-many-requests";
+    case "permission-denied":
+      return "permission-denied";
+    case "usernameTaken":
+      return "usernameTaken";
+    case "userNotFound":
+      return "userNotFound";
+    default:
+      return code;
+  }
+}
 
-// Safe default context value with no-op async functions
 const defaultAuthValue = {
   user: null,
   profile: null,
@@ -111,7 +107,7 @@ const defaultAuthValue = {
     role,
     profile: DEMO_PROFILES[role] || DEMO_PROFILES.admin,
   }),
-  logout: () => {},
+  logout: async () => {},
 };
 
 export const AuthContext = createContext(defaultAuthValue);
@@ -120,182 +116,318 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Helper to read mock users safely from localStorage
-  const getMockUsers = useCallback(() => {
-    try {
-      if (typeof window !== "undefined") {
-        const stored = localStorage.getItem(USERS_KEY);
-        if (stored) {
-          return JSON.parse(stored);
-        }
-        localStorage.setItem(USERS_KEY, JSON.stringify(SEED_USERS));
-        return SEED_USERS;
+  // Authentication State Listener
+  useEffect(() => {
+    if (!isFirebaseConfigured || !auth || !db) {
+      const mockSession = getMockSession();
+      if (mockSession) {
+        setProfile(mockSession);
       }
-    } catch (err) {
-      console.warn("Could not read mock users:", err);
+      setLoading(false);
+      return;
     }
-    return SEED_USERS;
+
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const userDocRef = doc(db, "users", firebaseUser.uid);
+          const snap = await getDoc(userDocRef);
+
+          if (snap.exists()) {
+            const data = snap.data();
+            const cleanProfile = {
+              uid: firebaseUser.uid,
+              role: data.role || "admin",
+              name: data.name || "",
+              username: data.username || "",
+              email: data.email || firebaseUser.email || "",
+              phone: data.phone || "",
+              companyId: data.companyId || "",
+              department: data.department || "",
+              driverId: data.driverId || "",
+              vehicleNumber: data.vehicleNumber || "",
+              priority: data.priority || "",
+              isDemo: Boolean(data.isDemo),
+            };
+            setProfile(cleanProfile);
+          } else {
+            setProfile({
+              uid: firebaseUser.uid,
+              role: "admin",
+              name: firebaseUser.displayName || "Operator",
+              username: "",
+              email: firebaseUser.email || "",
+              phone: "",
+              companyId: "",
+              department: "",
+              driverId: "",
+              vehicleNumber: "",
+              priority: "",
+              isDemo: false,
+            });
+          }
+        } catch (err) {
+          console.warn("Firestore user profile fetch warning:", err);
+        } finally {
+          setLoading(false);
+        }
+      } else {
+        setProfile(null);
+        setLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
   }, []);
 
-  // Hydrate user session on mount
-  useEffect(() => {
-    try {
-      if (typeof window !== "undefined") {
-        getMockUsers(); // Initialize seeds if empty
-        const session = localStorage.getItem(SESSION_KEY);
-        if (session) {
-          const parsed = JSON.parse(session);
-          setProfile(parsed);
+  // Signup: lowercase username; check uniqueness; create auth user; setDoc users/{uid} & usernames/{username}
+  const signup = useCallback(async (role, formData = {}) => {
+    setLoading(true);
+    if (!isFirebaseConfigured || !auth || !db) {
+      try {
+        const res = await mockSignup(role, formData);
+        if (res.ok && res.profile) {
+          setProfile(res.profile);
         }
+        return res;
+      } finally {
+        setLoading(false);
       }
+    }
+
+    try {
+      const rawUsername = formData.username || "";
+      const username = rawUsername.trim().toLowerCase();
+      const rawEmail = formData.email || formData.gmail || "";
+      const email = rawEmail.trim().toLowerCase();
+      const password = formData.password || "";
+
+      // 1. Check if usernames/{username} already exists
+      const usernameDocRef = doc(db, "usernames", username);
+      const usernameSnap = await getDoc(usernameDocRef);
+      if (usernameSnap.exists()) {
+        return { ok: false, error: "usernameTaken" };
+      }
+
+      // 2. Format phone and vehicle number
+      const rawPhone = (formData.phone || "").replace(/\D/g, "").slice(-10);
+      const phone = rawPhone ? `+91${rawPhone}` : "";
+      const vehicleNumber = (formData.vehicleNumber || "").trim().toUpperCase();
+
+      // 3. Create Firebase Auth user
+      const userCred = await createUserWithEmailAndPassword(auth, email, password);
+      const uid = userCred.user.uid;
+
+      const resolvedRole = role || "admin";
+      const newProfile = {
+        uid,
+        role: resolvedRole,
+        name: formData.name || formData.fullName || "",
+        username,
+        email,
+        phone,
+        companyId: formData.companyId || "",
+        department: formData.department || "",
+        driverId: formData.driverId || "",
+        vehicleNumber,
+        priority: formData.priority || "",
+        isDemo: false,
+      };
+
+      // 4. Save to users/{uid} with serverTimestamp()
+      await setDoc(doc(db, "users", uid), {
+        ...newProfile,
+        createdAt: serverTimestamp(),
+      });
+
+      // 5. Save username mapping in usernames/{username}
+      await setDoc(usernameDocRef, {
+        uid,
+        email,
+      });
+
+      setProfile(newProfile);
+      return { ok: true, role: resolvedRole, profile: newProfile };
     } catch (err) {
-      console.warn("Could not read auth session:", err);
+      console.error("Firebase signup error:", err);
+      const mappedErr = mapFirebaseError(err?.code);
+      return { ok: false, error: mappedErr };
     } finally {
       setLoading(false);
     }
-  }, [getMockUsers]);
-
-  // Signup function: never throws, returns { ok: true, role } or { ok: false, error }
-  const signup = useCallback(
-    async (role, formData = {}) => {
-      setLoading(true);
-      try {
-        await sleep(600); // simulate 600ms network delay per requirements
-
-        const users = getMockUsers();
-        const normalizedUsername = (formData.username || "").trim().toLowerCase();
-        const normalizedEmail = (formData.email || formData.gmail || "").trim().toLowerCase();
-
-        // Validate username uniqueness
-        const usernameExists = users.some(
-          (u) => (u.username || "").toLowerCase() === normalizedUsername
-        );
-        if (usernameExists) {
-          return { ok: false, error: "Username is already registered. Please choose another." };
-        }
-
-        // Validate email uniqueness
-        const emailExists = users.some(
-          (u) => (u.email || "").toLowerCase() === normalizedEmail
-        );
-        if (emailExists) {
-          return { ok: false, error: "Gmail address is already registered. Please login instead." };
-        }
-
-        const resolvedRole = role || "admin";
-        const newProfile = {
-          uid: `usr-${Date.now()}`,
-          role: resolvedRole,
-          name: formData.name || formData.fullName || "",
-          username: formData.username || "",
-          email: normalizedEmail,
-          phone: formData.phone || "",
-          companyId: formData.companyId || "",
-          department: formData.department || "",
-          driverId: formData.driverId || "",
-          vehicleNumber: formData.vehicleNumber || "",
-          priority: formData.priority || "",
-          password: formData.password || "",
-        };
-
-        // Persist to localStorage
-        try {
-          if (typeof window !== "undefined") {
-            const updatedUsers = [...users, newProfile];
-            localStorage.setItem(USERS_KEY, JSON.stringify(updatedUsers));
-            localStorage.setItem(SESSION_KEY, JSON.stringify(newProfile));
-          }
-        } catch (storageErr) {
-          console.warn("Could not save profile to localStorage:", storageErr);
-        }
-
-        setProfile(newProfile);
-        return { ok: true, role: resolvedRole, profile: newProfile };
-      } catch (err) {
-        console.error("Signup error:", err);
-        return { ok: false, error: err.message || "An unexpected error occurred during signup." };
-      } finally {
-        setLoading(false);
-      }
-    },
-    [getMockUsers]
-  );
-
-  // Login function: never throws, returns { ok: true, role } or { ok: false, error }
-  const login = useCallback(
-    async (identifier, password) => {
-      setLoading(true);
-      try {
-        await sleep(600); // simulate 600ms network delay per requirements
-
-        const users = getMockUsers();
-        const cleanId = (identifier || "").trim().toLowerCase();
-
-        const matched = users.find(
-          (u) =>
-            (u.username || "").toLowerCase() === cleanId ||
-            (u.email || "").toLowerCase() === cleanId
-        );
-
-        if (!matched) {
-          return { ok: false, error: "No account found with this username or Gmail." };
-        }
-
-        if (matched.password && matched.password !== password) {
-          return { ok: false, error: "Incorrect password. Please verify your credentials." };
-        }
-
-        try {
-          if (typeof window !== "undefined") {
-            localStorage.setItem(SESSION_KEY, JSON.stringify(matched));
-          }
-        } catch (storageErr) {
-          console.warn("Could not save session to localStorage:", storageErr);
-        }
-
-        setProfile(matched);
-        return { ok: true, role: matched.role, profile: matched };
-      } catch (err) {
-        console.error("Login error:", err);
-        return { ok: false, error: err.message || "Failed to authenticate session." };
-      } finally {
-        setLoading(false);
-      }
-    },
-    [getMockUsers]
-  );
-
-  // Logout function
-  const logout = useCallback(() => {
-    try {
-      if (typeof window !== "undefined") {
-        localStorage.removeItem(SESSION_KEY);
-      }
-    } catch (err) {
-      console.warn("Could not remove session from localStorage:", err);
-    }
-    setProfile(null);
   }, []);
 
-  // Fast 1-click Demo Login for Judges and Reviewers
+  // Login: if identifier has no "@", resolve via usernames/{identifier} to email; signIn; load users/{uid}
+  const login = useCallback(async (identifier, password) => {
+    setLoading(true);
+    if (!isFirebaseConfigured || !auth || !db) {
+      try {
+        const res = await mockLogin(identifier, password);
+        if (res.ok && res.profile) {
+          setProfile(res.profile);
+        }
+        return res;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    try {
+      const cleanId = (identifier || "").trim();
+      let emailToAuth = cleanId;
+
+      if (!cleanId.includes("@")) {
+        const lowerUsername = cleanId.toLowerCase();
+        const usernameSnap = await getDoc(doc(db, "usernames", lowerUsername));
+        if (!usernameSnap.exists()) {
+          return { ok: false, error: "userNotFound" };
+        }
+        const uData = usernameSnap.data();
+        if (!uData || !uData.email) {
+          return { ok: false, error: "userNotFound" };
+        }
+        emailToAuth = uData.email;
+      }
+
+      const userCred = await signInWithEmailAndPassword(auth, emailToAuth, password);
+      const uid = userCred.user.uid;
+
+      const userSnap = await getDoc(doc(db, "users", uid));
+      if (!userSnap.exists()) {
+        return { ok: false, error: "userNotFound" };
+      }
+
+      const data = userSnap.data();
+      const loadedProfile = {
+        uid,
+        role: data.role || "admin",
+        name: data.name || "",
+        username: data.username || "",
+        email: data.email || emailToAuth,
+        phone: data.phone || "",
+        companyId: data.companyId || "",
+        department: data.department || "",
+        driverId: data.driverId || "",
+        vehicleNumber: data.vehicleNumber || "",
+        priority: data.priority || "",
+        isDemo: Boolean(data.isDemo),
+      };
+
+      setProfile(loadedProfile);
+      return { ok: true, role: loadedProfile.role, profile: loadedProfile };
+    } catch (err) {
+      console.error("Firebase login error:", err);
+      const mappedErr = mapFirebaseError(err?.code);
+      return { ok: false, error: mappedErr };
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Fast 1-click Demo Login using real Firebase demo accounts
   const loginDemo = useCallback(async (role = "admin") => {
     setLoading(true);
+    if (!isFirebaseConfigured || !auth || !db) {
+      try {
+        const res = await mockLoginDemo(role);
+        if (res.ok && res.profile) {
+          setProfile(res.profile);
+        }
+        return res;
+      } finally {
+        setLoading(false);
+      }
+    }
+
     try {
       const targetRole = (role || "admin").toLowerCase();
-      const demoProfile = DEMO_PROFILES[targetRole] || DEMO_PROFILES.admin;
+      const demoEmail =
+        targetRole === "driver"
+          ? "demo.driver@rippleroute.app"
+          : targetRole === "emergency"
+          ? "demo.emergency@rippleroute.app"
+          : "demo.admin@rippleroute.app";
+      const demoPassword = "RippleDemo#2026";
+      const demoTemplate = DEMO_FIREBASE_PROFILES[targetRole] || DEMO_FIREBASE_PROFILES.admin;
+
+      let userCred;
       try {
-        if (typeof window !== "undefined") {
-          localStorage.setItem(SESSION_KEY, JSON.stringify(demoProfile));
+        userCred = await signInWithEmailAndPassword(auth, demoEmail, demoPassword);
+      } catch (signInErr) {
+        const code = signInErr?.code || "";
+        if (
+          code === "auth/invalid-credential" ||
+          code === "auth/user-not-found" ||
+          code === "auth/invalid-login-credentials" ||
+          code.includes("not-found") ||
+          code.includes("invalid-credential")
+        ) {
+          // Account doesn't exist yet on this Firebase project; seed it
+          userCred = await createUserWithEmailAndPassword(auth, demoEmail, demoPassword);
+        } else {
+          throw signInErr;
         }
-      } catch (storageErr) {
-        console.warn("Could not save demo session to localStorage:", storageErr);
       }
+
+      const uid = userCred.user.uid;
+      const userDocRef = doc(db, "users", uid);
+      const snap = await getDoc(userDocRef);
+
+      const demoProfile = {
+        ...demoTemplate,
+        uid,
+        isDemo: true,
+      };
+
+      if (!snap.exists()) {
+        await setDoc(userDocRef, {
+          ...demoProfile,
+          createdAt: serverTimestamp(),
+        });
+        await setDoc(doc(db, "usernames", demoTemplate.username), {
+          uid,
+          email: demoEmail,
+        });
+      } else {
+        const existingData = snap.data();
+        Object.assign(demoProfile, existingData, { uid, isDemo: true });
+      }
+
       setProfile(demoProfile);
       return { ok: true, role: demoProfile.role, profile: demoProfile };
+    } catch (err) {
+      console.error("Firebase loginDemo error:", err);
+      const mappedErr = mapFirebaseError(err?.code);
+      return { ok: false, error: mappedErr };
     } finally {
       setLoading(false);
     }
   }, []);
+
+  // Logout: delete liveLocations/{uid} in try/catch, then signOut
+  const logout = useCallback(async () => {
+    if (!isFirebaseConfigured || !auth || !db) {
+      mockLogout();
+      setProfile(null);
+      return;
+    }
+
+    try {
+      const currentUid = auth.currentUser?.uid || profile?.uid;
+      if (currentUid && db) {
+        try {
+          await deleteDoc(doc(db, "liveLocations", currentUid));
+        } catch (locErr) {
+          console.warn("Could not delete liveLocation on logout:", locErr);
+        }
+      }
+      await signOut(auth);
+    } catch (err) {
+      console.error("Firebase logout error:", err);
+    } finally {
+      setProfile(null);
+    }
+  }, [profile?.uid]);
 
   const user = profile
     ? {

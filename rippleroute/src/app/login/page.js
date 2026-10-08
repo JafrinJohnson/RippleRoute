@@ -68,11 +68,13 @@ export default function LoginPage() {
           : "/emergency";
       router.push(destination);
     } else {
-      setError(res?.error || "Authentication failed. Please verify credentials.");
+      const rawError = res?.error || "auth/invalid-credential";
+      const displayError = t(rawError) || rawError;
+      setError(displayError);
       toast({
         type: "danger",
-        title: "Login Error",
-        description: res?.error || "Authentication failed.",
+        title: isTamil ? "உள்நுழைவு பிழை" : "Login Error",
+        description: displayError,
       });
     }
   };
