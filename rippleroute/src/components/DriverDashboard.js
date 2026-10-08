@@ -19,11 +19,12 @@ import {
   planRoutes,
   runQars,
   getAdvisory,
+  checkWeatherHazards,
   updateLiveLocation,
   sendMessage,
   subscribeMessages,
 } from "@/services/api";
-import { haversineMeters, minDistanceToPolylineMeters } from "@/lib/geo";
+import { haversineMeters, minDistanceToPolylineMeters, samplePolyline } from "@/lib/geo";
 import { routeCost } from "@/lib/routeCost";
 import { buildPath, pointAtDistance } from "@/lib/routeAnimator";
 import useRouteMover from "@/hooks/useRouteMover";
@@ -329,8 +330,12 @@ export default function DriverDashboard({ mode = "driver" }) {
 
 
   // State: Safety & Advisory
-  const [advisoryLines, setAdvisoryLines] = useState({ en: [], ta: [] });
+  const [advisoryLines, setAdvisoryLines] = useState({ en: [], ta: [], source: "template" });
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [weatherHazards, setWeatherHazards] = useState([]);
+  const weatherHazardsRef = useRef([]);
+  weatherHazardsRef.current = weatherHazards;
+  const warnedRainZoneIdsRef = useRef(new Set());
 
   // State: Dispatcher Chat Drawer
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -370,6 +375,27 @@ export default function DriverDashboard({ mode = "driver" }) {
     } catch (e) {
       console.warn("Web Audio API beep error:", e);
     }
+  }, []);
+
+  // Soft beep for rain alert
+  const playSoftBeep = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(480, ctx.currentTime);
+        gain.gain.setValueAtTime(0.12, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.35);
+      }
+    } catch (e) {}
   }, []);
 
   // Vibration alert
@@ -412,6 +438,47 @@ export default function DriverDashboard({ mode = "driver" }) {
   useEffect(() => {
     refreshDeliveries();
   }, [refreshDeliveries]);
+
+  // Active selected or QARS best road route
+  const activeRoute = qarsResult?.best || plannedRoutes[selectedRouteIndex];
+  const moverCoords = useMemo(() => {
+    return activeRoute?.coords || [];
+  }, [activeRoute]);
+
+  // Delivered callback when mover reaches the destination
+  const handleTripFinished = useCallback(async () => {
+    setTripStatus("delivered");
+    if (selectedDelivery) {
+      await updateDelivery(selectedDelivery.id, { status: "delivered" });
+      refreshDeliveries();
+      toast.success(
+        locale === "ta"
+          ? `விநியோகம் முடிந்தது! ${selectedDelivery.code} இலக்கை அடைந்தது.`
+          : `Package ${selectedDelivery.code} delivered! Destination reached.`
+      );
+    }
+  }, [selectedDelivery, refreshDeliveries, locale, toast]);
+
+  // Shared road movement engine hook (Advances frame-by-frame along OSRM road geometry)
+  const mover = useRouteMover(moverCoords, {
+    speedKmh: 40,
+    demoSpeedFactor,
+    loop: false,
+    autoStart: false,
+    onEnd: handleTripFinished,
+  });
+
+  moverRef.current = mover;
+
+  // Keep truck position and road heading synced with mover
+  useEffect(() => {
+    if (mover.position && (mover.running || tripStatus === "in_transit")) {
+      setCurrentPosition({ lat: mover.position.lat, lng: mover.position.lng });
+      if (typeof mover.position.heading === "number") {
+        setCurrentHeading(mover.position.heading);
+      }
+    }
+  }, [mover.position, mover.running, tripStatus]);
 
   // Subscribe to real-time hazards & monitor proximity
   useEffect(() => {
@@ -461,6 +528,34 @@ export default function DriverDashboard({ mode = "driver" }) {
 
     return () => unsubscribe();
   }, [locale, playHazardBeep, triggerHaptic, toast]);
+
+  // Rain hazard proximity monitor during trip (local memory only, NO API CALLS)
+  useEffect(() => {
+    if (tripStatus !== "in_transit" && !mover.running) return;
+    if (!currentPosition || !Array.isArray(weatherHazards) || weatherHazards.length === 0) return;
+
+    for (const rh of weatherHazards) {
+      if (!warnedRainZoneIdsRef.current.has(rh.id)) {
+        const d = haversineMeters(currentPosition, { lat: rh.lat, lng: rh.lng });
+        if (d <= 1000) {
+          warnedRainZoneIdsRef.current.add(rh.id);
+          const msg =
+            locale === "ta"
+              ? "🌧️ 1 கி.மீ.க்குள் கனமழை — கவனமாக ஓட்டவும்"
+              : "🌧️ Heavy rain within 1 km — drive carefully";
+          setActiveHazardAlert({
+            id: rh.id,
+            type: "rain",
+            distMeters: Math.round(d),
+            note: msg,
+          });
+          toast.warning(msg);
+          playSoftBeep();
+          break;
+        }
+      }
+    }
+  }, [currentPosition, tripStatus, mover.running, weatherHazards, locale, playSoftBeep, toast]);
 
   // Subscribe to Dispatcher Messages
   useEffect(() => {
@@ -524,6 +619,29 @@ export default function DriverDashboard({ mode = "driver" }) {
         if (allCandidateCoords.length > 1) {
           setMapFitBoundsCoords(allCandidateCoords);
         }
+
+        // Live weather hazard check along primary route (6 sampled points)
+        const primaryRoute = res.routes[0];
+        if (primaryRoute && primaryRoute.coords && primaryRoute.coords.length >= 2) {
+          const samplePts = samplePolyline(primaryRoute.coords, 6);
+          checkWeatherHazards(samplePts)
+            .then(async (liveRain) => {
+              const rainList = liveRain || [];
+              setWeatherHazards(rainList);
+              weatherHazardsRef.current = rainList;
+
+              const allHaz = [...hazardsRef.current, ...rainList];
+              const costData = routeCost(primaryRoute, allHaz, [], targetDelivery.priority);
+              const adv = await getAdvisory({
+                hazardsOnRoute: costData.hits,
+                rain: rainList.length > 0,
+                lang: locale,
+              });
+              setAdvisoryLines(adv);
+            })
+            .catch(() => {});
+        }
+
         toast.info(
           locale === "ta"
             ? `${res.routes.length} சாத்தியமான வழிகள் கண்டறியப்பட்டன`
@@ -572,11 +690,12 @@ export default function DriverDashboard({ mode = "driver" }) {
     try {
       setIsOptimizing(true);
       const currPos = currentPositionRef.current || DEPOT_PEELAMEDU;
+      const allCurrentHazards = [...hazardsRef.current, ...weatherHazardsRef.current];
       const res = await runQars({
         from: currPos,
         to: { lat: targetDelivery.lat, lng: targetDelivery.lng },
         routes: currentRoutes,
-        hazards: hazardsRef.current,
+        hazards: allCurrentHazards,
         priority: targetDelivery.priority,
       });
 
@@ -600,11 +719,26 @@ export default function DriverDashboard({ mode = "driver" }) {
         }
       }
 
+      // Check live weather hazards along the best route (6 sampled points)
+      let currentRainList = weatherHazardsRef.current || [];
+      if (res.best && Array.isArray(res.best.coords) && res.best.coords.length >= 2) {
+        const samplePts = samplePolyline(res.best.coords, 6);
+        try {
+          const liveRain = await checkWeatherHazards(samplePts);
+          if (Array.isArray(liveRain)) {
+            currentRainList = liveRain;
+            setWeatherHazards(liveRain);
+            weatherHazardsRef.current = liveRain;
+          }
+        } catch (_) {}
+      }
+
       // Fetch AI advisory for best route
       const bestHits = res.best?.hits || [];
+      const hasRain = currentRainList.length > 0 || (Array.isArray(res.rain) && res.rain.length > 0);
       const adv = await getAdvisory({
         hazardsOnRoute: bestHits,
-        rain: hazardsRef.current.some((h) => h.active && h.type === "rain"),
+        rain: hasRain,
         lang: locale,
       });
       setAdvisoryLines(adv);
@@ -640,9 +774,24 @@ export default function DriverDashboard({ mode = "driver" }) {
     if (!lines || lines.length === 0) return;
 
     window.speechSynthesis.cancel();
-    const fullText = lines.join(". ");
-    const utterance = new SpeechSynthesisUtterance(fullText);
-    utterance.lang = locale === "ta" ? "ta-IN" : "en-IN";
+
+    const voices = window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : [];
+    let targetLang = locale === "ta" ? "ta-IN" : "en-IN";
+    let textToSpeak = lines.join(". ");
+
+    if (locale === "ta") {
+      const hasTamilVoice = voices.some(
+        (v) => (v.lang || "").toLowerCase().startsWith("ta") || (v.lang || "").toLowerCase().includes("tam")
+      );
+      if (!hasTamilVoice && voices.length > 0) {
+        toast.info("Tamil voice not available on this device");
+        targetLang = "en-IN";
+        textToSpeak = (advisoryLines.en && advisoryLines.en.length > 0 ? advisoryLines.en : lines).join(". ");
+      }
+    }
+
+    const utterance = new SpeechSynthesisUtterance(textToSpeak);
+    utterance.lang = targetLang;
     utterance.rate = 0.95;
 
     utterance.onend = () => setIsSpeaking(false);
@@ -651,47 +800,6 @@ export default function DriverDashboard({ mode = "driver" }) {
     setIsSpeaking(true);
     window.speechSynthesis.speak(utterance);
   }, [isSpeaking, advisoryLines, locale, toast]);
-
-  // Active selected or QARS best road route
-  const activeRoute = qarsResult?.best || plannedRoutes[selectedRouteIndex];
-  const moverCoords = useMemo(() => {
-    return activeRoute?.coords || [];
-  }, [activeRoute]);
-
-  // Delivered callback when mover reaches the destination
-  const handleTripFinished = useCallback(async () => {
-    setTripStatus("delivered");
-    if (selectedDelivery) {
-      await updateDelivery(selectedDelivery.id, { status: "delivered" });
-      refreshDeliveries();
-      toast.success(
-        locale === "ta"
-          ? `விநியோகம் முடிந்தது! ${selectedDelivery.code} இலக்கை அடைந்தது.`
-          : `Package ${selectedDelivery.code} delivered! Destination reached.`
-      );
-    }
-  }, [selectedDelivery, refreshDeliveries, locale, toast]);
-
-  // Shared road movement engine hook (Advances frame-by-frame along OSRM road geometry)
-  const mover = useRouteMover(moverCoords, {
-    speedKmh: 40,
-    demoSpeedFactor,
-    loop: false,
-    autoStart: false,
-    onEnd: handleTripFinished,
-  });
-
-  moverRef.current = mover;
-
-  // Keep truck position and road heading synced with mover
-  useEffect(() => {
-    if (mover.position && (mover.running || tripStatus === "in_transit")) {
-      setCurrentPosition({ lat: mover.position.lat, lng: mover.position.lng });
-      if (typeof mover.position.heading === "number") {
-        setCurrentHeading(mover.position.heading);
-      }
-    }
-  }, [mover.position, mover.running, tripStatus]);
 
   // Trip Status actions
   const handleStartTrip = async () => {
@@ -765,11 +873,12 @@ export default function DriverDashboard({ mode = "driver" }) {
       if (res && Array.isArray(res.routes) && res.routes.length > 0) {
         setPlannedRoutes(res.routes);
         setIsOptimizing(true);
+        const allCurrentHaz = [...hazardsRef.current, ...weatherHazardsRef.current];
         const qRes = await runQars({
           from: currPos,
           to: { lat: targetDelivery.lat, lng: targetDelivery.lng },
           routes: res.routes,
-          hazards: hazardsRef.current,
+          hazards: allCurrentHaz,
           priority: targetDelivery.priority,
         });
         setQarsResult(qRes);
@@ -779,6 +888,25 @@ export default function DriverDashboard({ mode = "driver" }) {
           if (Array.isArray(qRes.best.coords) && qRes.best.coords.length > 1) {
             setMapFitBoundsCoords(qRes.best.coords);
           }
+
+          let rainList = weatherHazardsRef.current || [];
+          if (Array.isArray(qRes.best.coords) && qRes.best.coords.length >= 2) {
+            const samplePts = samplePolyline(qRes.best.coords, 6);
+            try {
+              const liveRain = await checkWeatherHazards(samplePts);
+              if (Array.isArray(liveRain)) {
+                rainList = liveRain;
+                setWeatherHazards(liveRain);
+                weatherHazardsRef.current = rainList;
+              }
+            } catch (_) {}
+          }
+          const bestHits = qRes.best?.hits || [];
+          getAdvisory({
+            hazardsOnRoute: bestHits,
+            rain: rainList.length > 0 || (qRes.rain && qRes.rain.length > 0),
+            lang: locale,
+          }).then((adv) => setAdvisoryLines(adv)).catch(() => {});
         }
         if (tripStatus === "in_transit") {
           moverRef.current?.start();
@@ -980,6 +1108,11 @@ export default function DriverDashboard({ mode = "driver" }) {
     return { points, area };
   }, [qarsResult]);
 
+  // Combined hazards for map display & routing (Firestore hazards + local live weather hazards)
+  const allMapHazards = useMemo(() => {
+    return [...hazards, ...weatherHazards];
+  }, [hazards, weatherHazards]);
+
   return (
     <div className="relative w-full min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       {/* Top Header Bar */}
@@ -1076,7 +1209,7 @@ export default function DriverDashboard({ mode = "driver" }) {
             zoom={13}
             vehicles={mapVehicles}
             routes={mapRoutes}
-            hazards={hazards}
+            hazards={allMapHazards}
             deliveries={deliveries}
             selectedUid={profile?.uid || profile?.driverId || "my-truck"}
             height="100%"
@@ -1468,7 +1601,7 @@ export default function DriverDashboard({ mode = "driver" }) {
                     : "border-amber-400 bg-amber-500/20 shadow-md shadow-amber-500/20";
 
                   // Count hazards touching this candidate using routeCost so cards and QARS always agree
-                  const costData = routeCost(route, hazards, [], selectedDelivery?.priority);
+                  const costData = routeCost(route, allMapHazards, [], selectedDelivery?.priority);
                   const hitCount = costData.hits.length;
 
                   return (
@@ -1723,10 +1856,21 @@ export default function DriverDashboard({ mode = "driver" }) {
           {/* SECTION 5: Safety & Options (Advisories + Audio Read-Aloud) */}
           <div className="flex flex-col gap-2.5">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
-                <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
-                <span>Safety & Advisory</span>
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                  <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Safety & Advisory</span>
+                </h3>
+                <span
+                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full border ${
+                    advisoryLines?.source === "gemini"
+                      ? "bg-purple-500/15 text-purple-300 border-purple-500/30"
+                      : "bg-cyan-500/15 text-cyan-300 border-cyan-500/30"
+                  }`}
+                >
+                  {advisoryLines?.source === "gemini" ? "AI: Gemini" : "Safety tips"}
+                </span>
+              </div>
               <button
                 onClick={toggleSpeech}
                 className={`p-1.5 rounded-lg border transition-all flex items-center gap-1 text-xs ${
@@ -1742,7 +1886,7 @@ export default function DriverDashboard({ mode = "driver" }) {
             </div>
 
             {/* Advisory Lines Card */}
-            <div className="p-3 rounded-xl bg-white/[0.02] border border-glass-border flex flex-col gap-1.5 text-xs">
+            <div className="p-3 rounded-xl bg-white/[0.02] border border-glass-border flex flex-col gap-2 text-xs">
               {(locale === "ta" ? advisoryLines.ta : advisoryLines.en).length > 0 ? (
                 (locale === "ta" ? advisoryLines.ta : advisoryLines.en).map((line, idx) => (
                   <div key={idx} className="flex items-start gap-2 text-slate-300 leading-relaxed">
@@ -1755,6 +1899,35 @@ export default function DriverDashboard({ mode = "driver" }) {
                   {locale === "ta"
                     ? "பாதை தெளிவு. வழியில் எவ்வித தீவிர ஆபத்துகளும் இல்லை."
                     : "Standard corridor confirmed. No active hazards blocking route path."}
+                </div>
+              )}
+
+              {/* Live Rain Hazards from Open-Meteo listed here */}
+              {weatherHazards.length > 0 && (
+                <div className="mt-1 pt-2 border-t border-white/10 flex flex-col gap-1.5">
+                  <div className="flex items-center justify-between text-[10px] font-mono text-cyan-300">
+                    <span className="flex items-center gap-1">
+                      <span>🌧️</span>
+                      <span>
+                        {locale === "ta" ? "மழை மண்டலங்கள்" : "Rain hazards"} ({weatherHazards.length})
+                      </span>
+                    </span>
+                    <span className="text-[9px] text-slate-400">Open-Meteo</span>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {weatherHazards.map((w) => (
+                      <div
+                        key={w.id}
+                        className="flex items-center justify-between p-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[11px] font-mono text-slate-300"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                          <span>{w.note}</span>
+                        </span>
+                        <span className="text-[10px] text-cyan-300">r={w.radiusM}m</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

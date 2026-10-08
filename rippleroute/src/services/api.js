@@ -282,6 +282,49 @@ export async function runQars({ from, to, routes, hazards = [], priority = "norm
  * 4. Advisory Service
  */
 export async function getAdvisory({ hazardsOnRoute = [], rain = false, lang = "en" }) {
+  const rainPayload = Array.isArray(rain)
+    ? rain
+    : typeof rain === "number"
+    ? [{ mm: rain }]
+    : rain
+    ? [{ mm: 5 }]
+    : [];
+
+  // 1. Primary: POST /api/advisory with 15s timeout
+  if (typeof window !== "undefined") {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      const res = await fetch("/api/advisory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          hazardsOnRoute,
+          rain: rainPayload,
+          lang,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.en) && Array.isArray(data?.ta)) {
+          return {
+            en: data.en,
+            ta: data.ta,
+            source: data.source || "gemini",
+          };
+        }
+      }
+    } catch (e) {
+      console.warn("POST /api/advisory failed, using mock lines:", e?.message || e);
+    }
+  }
+
+  // 2. Mock Fallback Lines
   await new Promise((r) => setTimeout(r, 40));
 
   const hasHazards = Array.isArray(hazardsOnRoute) && hazardsOnRoute.length > 0;
@@ -331,7 +374,44 @@ export async function getAdvisory({ hazardsOnRoute = [], rain = false, lang = "e
   return {
     en: [enLine1, enLine2],
     ta: [taLine1, taLine2],
+    source: "template",
   };
+}
+
+/**
+ * Live Weather Hazards Check
+ * Calls POST /api/weather-hazards with up to 8 points
+ */
+export async function checkWeatherHazards(points) {
+  if (!Array.isArray(points) || points.length === 0) return [];
+
+  if (typeof window !== "undefined") {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+
+      const res = await fetch("/api/weather-hazards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ points: points.slice(0, 8) }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.hazards)) {
+          return data.hazards;
+        }
+      }
+    } catch (e) {
+      console.warn("POST /api/weather-hazards failed, using fallback:", e?.message || e);
+    }
+  }
+
+  // Mock version fallback
+  return [];
 }
 
 /**

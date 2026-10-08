@@ -19,6 +19,7 @@ import {
   planRoutes,
   runQars,
   getAdvisory,
+  checkWeatherHazards,
   subscribeLiveLocations,
   sendMessage,
   subscribeMessages,
@@ -117,6 +118,9 @@ function AdminControlRoom() {
   // Core Real-Time Streams
   const [vehicles, setVehicles] = useState([]);
   const [hazards, setHazards] = useState([]);
+  const [weatherHazards, setWeatherHazards] = useState([]);
+  const [isScanningWeather, setIsScanningWeather] = useState(false);
+  const allMapHazards = useMemo(() => [...hazards, ...weatherHazards], [hazards, weatherHazards]);
   const [deliveries, setDeliveries] = useState([]);
   const [loadingVehicles, setLoadingVehicles] = useState(true);
   const [loadingHazards, setLoadingHazards] = useState(true);
@@ -581,6 +585,37 @@ function AdminControlRoom() {
     } catch (err) {
       console.error("Reassign error:", err);
       toast.error("Failed to reassign driver");
+    }
+  };
+
+  // Weather scan for all active vehicle positions (max 8)
+  const handleWeatherScan = async () => {
+    if (isScanningWeather) return;
+    setIsScanningWeather(true);
+    try {
+      const activePts = (vehicles || [])
+        .filter((v) => typeof v.lat === "number" && typeof v.lng === "number")
+        .slice(0, 8)
+        .map((v) => ({ lat: v.lat, lng: v.lng }));
+
+      const scanPts = activePts.length > 0 ? activePts : [
+        { lat: DEPOT_PEELAMEDU.lat, lng: DEPOT_PEELAMEDU.lng },
+        { lat: COIMBATORE_CENTER.lat, lng: COIMBATORE_CENTER.lng },
+      ];
+
+      const rainZones = await checkWeatherHazards(scanPts);
+      const list = Array.isArray(rainZones) ? rainZones : [];
+      setWeatherHazards(list);
+      toast.success(
+        language === "ta"
+          ? `வானிலை ஸ்கேன் முடிந்தது — ${list.length} மழை மண்டலங்கள்`
+          : `Weather scan complete — ${list.length} rain zones`
+      );
+    } catch (err) {
+      console.error("Weather scan error:", err);
+      toast.error("Weather scan failed");
+    } finally {
+      setIsScanningWeather(false);
     }
   };
 
@@ -1131,7 +1166,7 @@ function AdminControlRoom() {
               center={COIMBATORE_CENTER}
               zoom={13}
               vehicles={vehicles}
-              hazards={hazards}
+              hazards={allMapHazards}
               deliveries={deliveries}
               selectedUid={selectedDriver?.uid}
               flyTo={flyToCoords}
@@ -1221,6 +1256,18 @@ function AdminControlRoom() {
                   <X className="w-4 h-4" />
                 </button>
               )}
+
+              {/* Weather Scan Button */}
+              <div className="h-4 w-px bg-white/10 mx-1 hidden sm:block" />
+              <button
+                onClick={handleWeatherScan}
+                disabled={isScanningWeather}
+                className="px-2.5 py-1 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 border border-sky-500/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Scan live weather hazards for active vehicles"
+              >
+                <span>{isScanningWeather ? "⏳" : "🌧️"}</span>
+                <span>{isScanningWeather ? "Scanning..." : "Weather scan"}</span>
+              </button>
             </div>
 
             {/* Active Hazard Marking Guidance Chip */}

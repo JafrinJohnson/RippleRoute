@@ -11,12 +11,12 @@ import { toLatLng } from "./geo";
  * @param {Array<{lat: number, lng: number} | [number, number]>} points
  * @returns {Promise<Array<{lat: number, lng: number, mm: number, code: number}>>}
  */
-export async function getRainPoints(points) {
+export async function getRainPoints(points, maxPoints = 8) {
   if (!Array.isArray(points) || points.length === 0) {
     return [];
   }
 
-  const pts = points.map(toLatLng).filter((p) => p && !isNaN(p.lat) && !isNaN(p.lng)).slice(0, 5);
+  const pts = points.map(toLatLng).filter((p) => p && !isNaN(p.lat) && !isNaN(p.lng)).slice(0, maxPoints || 8);
   if (pts.length === 0) {
     return [];
   }
