@@ -25,13 +25,16 @@ import { useLanguage } from "@/context/LanguageContext";
 import Button from "@/components/ui/Button";
 import { Skeleton, EmptyState } from "@/components/ui";
 
+import demoRoutesData from "@/data/demoRoutes.json";
+
 // Real Coimbatore Waypoints
 const DEPOT_COORDS = { lat: 11.0270, lng: 77.0100 }; // Peelamedu Depot
 const GANDHIPURAM_COORDS = { lat: 11.0168, lng: 76.9658 }; // Gandhipuram Hub
 const RS_PURAM_COORDS = { lat: 11.0089, lng: 76.9500 }; // RS Puram Center
 const SINGANALLUR_COORDS = { lat: 10.9990, lng: 77.0300 }; // Singanallur Terminal
+const SAIBABA_COORDS = { lat: 11.0330, lng: 76.9480 }; // Saibaba Colony
 
-// Base fleet vehicle profiles (Anonymised for Public Live Map)
+// Base fleet vehicle profiles (Anonymised for Public Live Map - 4 moving trucks)
 const FLEET_PROFILES = [
   {
     uid: "drv-01",
@@ -75,13 +78,13 @@ const FLEET_PROFILES = [
     uid: "drv-04",
     name: "Truck 2",
     vehicleNumber: "Truck 2",
-    status: "idle",
+    status: "on_time",
     role: "driver",
     priority: "normal",
-    speedKmh: 0,
-    cargoType: "Reserve Fleet Ev (Peelamedu Central Depot)",
-    routeTarget: "depot",
-    progressRatio: 0,
+    speedKmh: 40,
+    cargoType: "Commercial Electronics (Peelamedu → Saibaba Colony)",
+    routeTarget: "saibaba",
+    progressRatio: 0.65,
   },
 ];
 
@@ -259,6 +262,22 @@ export default function LiveMapPage() {
         pathsMap.singanallur = buildPath(sing.coords);
       }
 
+      // Route 4: Peelamedu to Saibaba Colony (Standard Freight - Truck 2)
+      const saibabaCoords = demoRoutesData["del-03"]?.coords || [];
+      if (saibabaCoords.length >= 2) {
+        const sDist = demoRoutesData["del-03"].distanceM;
+        const sKm = (sDist / 1000).toFixed(1);
+        activeRoutes.push({
+          id: "route-saibaba",
+          coords: saibabaCoords,
+          color: "#A855F7",
+          highlighted: false,
+          dashed: true,
+          label: `MTP Rd Corridor to Saibaba Colony (${sKm} km)`,
+        });
+        pathsMap.saibaba = buildPath(saibabaCoords);
+      }
+
       pathsRef.current = pathsMap;
       setRoutes(activeRoutes);
 
@@ -268,12 +287,17 @@ export default function LiveMapPage() {
         if (path && path.coords.length >= 2) {
           const currentDistM = Math.round(path.totalDistance * prof.progressRatio);
           const pt = pointAtDistance(path, currentDistM);
+          const remainingM = Math.max(0, path.totalDistance - currentDistM);
+          const etaMinutes = prof.speedKmh > 0 ? Math.max(1, Math.round((remainingM / (prof.speedKmh * 1000 / 60)) / 8)) : 0;
           return {
             ...prof,
             lat: pt.lat,
             lng: pt.lng,
             heading: pt.heading,
             currentDistM,
+            totalDistanceM: path.totalDistance,
+            progress: prof.progressRatio,
+            etaMinutes,
             routeCoords: path.coords,
           };
         }
@@ -284,6 +308,9 @@ export default function LiveMapPage() {
           lng: DEPOT_COORDS.lng,
           heading: 0,
           currentDistM: 0,
+          totalDistanceM: 0,
+          progress: 0,
+          etaMinutes: 0,
           routeCoords: null,
         };
       });
@@ -323,6 +350,9 @@ export default function LiveMapPage() {
         );
 
         const pt = pointAtDistance(path, nextDistM);
+        const progress = path.totalDistance > 0 ? nextDistM / path.totalDistance : 0;
+        const remainingM = Math.max(0, path.totalDistance - nextDistM);
+        const etaMinutes = v.speedKmh > 0 ? Math.max(1, Math.round((remainingM / (v.speedKmh * 1000 / 60)) / 8)) : 0;
 
         return {
           ...v,
@@ -330,6 +360,9 @@ export default function LiveMapPage() {
           lng: pt.lng,
           heading: pt.heading,
           currentDistM: nextDistM,
+          totalDistanceM: path.totalDistance,
+          progress,
+          etaMinutes,
         };
       })
     );

@@ -10,6 +10,7 @@ import { useTheme } from "@/context/ThemeContext";
 import { useToast } from "@/context/ToastContext";
 import {
   getDeliveries,
+  subscribeDeliveries,
   updateDelivery,
   getHazards,
   subscribeHazards,
@@ -25,6 +26,7 @@ import {
   DEPOT_PEELAMEDU,
   COIMBATORE_CENTER,
 } from "@/services/api";
+import { seedDemoData } from "@/lib/seed";
 import { haversineMeters } from "@/lib/geo";
 import {
   Truck,
@@ -223,7 +225,9 @@ function AdminControlRoom() {
     return unsub;
   }, [language, toast]);
 
-  // 4. Initial Fetch Deliveries
+  // 4. Subscribe to Deliveries
+  const [isSeeding, setIsSeeding] = useState(false);
+
   const fetchDeliveries = useCallback(async () => {
     try {
       const list = await getDeliveries();
@@ -236,8 +240,33 @@ function AdminControlRoom() {
   }, []);
 
   useEffect(() => {
-    fetchDeliveries();
-  }, [fetchDeliveries]);
+    const unsub = subscribeDeliveries((list) => {
+      setDeliveries(list || []);
+      setLoadingDeliveries(false);
+    });
+    return unsub;
+  }, []);
+
+  const handleSeedData = async () => {
+    try {
+      setIsSeeding(true);
+      const res = await seedDemoData();
+      if (res.ok) {
+        toast.success(
+          language === "ta"
+            ? "டெமோ தரவு வெற்றிகரமாக சேர்க்கப்பட்டது!"
+            : `Demo data seeded successfully (${res.created} records)!`
+        );
+      } else {
+        toast.error(res.error || "Failed to seed demo data");
+      }
+    } catch (err) {
+      console.error("Seed demo data error:", err);
+      toast.error("Failed to seed demo data");
+    } finally {
+      setIsSeeding(false);
+    }
+  };
 
   // 5. Selected Driver resolution
   const selectedDriver = useMemo(() => {
@@ -419,9 +448,14 @@ function AdminControlRoom() {
     }
   };
 
+  // In-flight guard for re-optimizing
+  const isReoptimizingRef = useRef(false);
+
   // Handle Re-optimize Driver Route via QARS
   const handleReoptimizeDriver = async () => {
     if (!selectedDriver) return;
+    if (isReoptimizingRef.current) return;
+    isReoptimizingRef.current = true;
     try {
       setIsReoptimizing(true);
       // Plan candidates from driver's current position to destination
@@ -452,6 +486,7 @@ function AdminControlRoom() {
       console.error("Re-optimize error:", err);
       toast.error("Failed to compute new route");
     } finally {
+      isReoptimizingRef.current = false;
       setIsReoptimizing(false);
     }
   };
@@ -621,6 +656,20 @@ function AdminControlRoom() {
 
         {/* Right: Controls & Profile Action */}
         <div className="flex items-center gap-2 sm:gap-2.5">
+          {/* Seed demo data button (visible only when there are 0 deliveries) */}
+          {deliveries.length === 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleSeedData}
+              loading={isSeeding}
+              icon={Sparkles}
+              className="text-cyan-400 hover:text-cyan-300 hover:bg-cyan-500/10 border border-cyan-500/30 text-xs py-1 px-2.5"
+            >
+              Seed demo data
+            </Button>
+          )}
+
           {/* Mobile Tab Toggle */}
           <div className="flex lg:hidden items-center p-0.5 rounded-lg bg-white/5 border border-glass-border">
             <button
@@ -1087,6 +1136,11 @@ function AdminControlRoom() {
               selectedUid={selectedDriver?.uid}
               flyTo={flyToCoords}
               onMapClick={handleMapClick}
+              onVehicleClick={(uid) => {
+                setSelectedDriverUid(uid);
+                const drv = vehicles.find((v) => v.uid === uid);
+                if (drv) setFlyToCoords([drv.lat, drv.lng]);
+              }}
               height="100%"
               showDepot={true}
               depotCoords={[DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng]}
@@ -1371,6 +1425,33 @@ function AdminControlRoom() {
                     <span className="text-emerald-400 font-bold">
                       {selectedDriver.delivered ? "Delivered ✓" : "In Progress"}
                     </span>
+                  </div>
+
+                  {/* Road Progress Bar & Dynamic ETA */}
+                  <div className="pt-2 border-t border-glass-border/60 flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between text-[11px] font-mono">
+                      <span className="text-slate-400">Road Progress:</span>
+                      <span className="text-cyan-300 font-bold">
+                        {Math.round((selectedDriver.progress || 0) * 100)}%
+                        {selectedDriver.currentDistM ? ` (${(selectedDriver.currentDistM / 1000).toFixed(1)} km)` : ""}
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-300"
+                        style={{
+                          width: `${Math.min(100, Math.max(0, Math.round((selectedDriver.progress || 0) * 100)))}%`,
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                      <span>Dynamic ETA:</span>
+                      <span className="text-emerald-400 font-bold">
+                        {selectedDriver.etaMinutes
+                          ? `~${selectedDriver.etaMinutes} min remaining`
+                          : (selectedDriver.etaText || "On schedule")}
+                      </span>
+                    </div>
                   </div>
                 </div>
 

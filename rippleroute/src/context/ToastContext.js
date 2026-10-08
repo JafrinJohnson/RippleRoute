@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useState, useCallback, useMemo, useRef } from "react";
 import clsx from "clsx";
 import { CheckCircle2, AlertTriangle, AlertOctagon, Info, X, Zap } from "lucide-react";
 
@@ -21,11 +21,12 @@ function createToastFunction(addToast, removeToast = () => {}) {
       const type = options.variant || options.type || "info";
       const normalizedType =
         type === "error" ? "danger" : type === "warning" ? "warn" : type;
+      const defaultDuration = normalizedType === "info" ? 3000 : 4500;
       return addToast({
         title: arg,
         description: options.description,
         type: normalizedType,
-        duration: options.duration ?? 4500,
+        duration: options.duration ?? defaultDuration,
         action: options.action || options.actions,
       });
     }
@@ -33,11 +34,12 @@ function createToastFunction(addToast, removeToast = () => {}) {
     const type = arg.variant || arg.type || "info";
     const normalizedType =
       type === "error" ? "danger" : type === "warning" ? "warn" : type;
+    const defaultDuration = normalizedType === "info" ? 3000 : 4500;
     return addToast({
       title: arg.title,
       description: arg.description,
       type: normalizedType,
-      duration: arg.duration ?? 4500,
+      duration: arg.duration ?? defaultDuration,
       action: arg.action || arg.actions,
     });
   };
@@ -48,15 +50,15 @@ function createToastFunction(addToast, removeToast = () => {}) {
       typeof message === "string"
         ? options.description
         : message?.description;
+    const normalizedType =
+      type === "error" ? "danger" : type === "warning" ? "warn" : type;
+    const defaultDuration = normalizedType === "info" ? 3000 : 4500;
     const duration =
-      options.duration ?? (typeof message === "object" ? message?.duration : undefined) ?? 4500;
+      options.duration ?? (typeof message === "object" ? message?.duration : undefined) ?? defaultDuration;
     const action =
       options.action ||
       options.actions ||
       (typeof message === "object" ? message?.action || message?.actions : undefined);
-
-    const normalizedType =
-      type === "error" ? "danger" : type === "warning" ? "warn" : type;
 
     return addToast({
       title,
@@ -90,8 +92,15 @@ const ToastContext = createContext(defaultToast);
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
+  const toastsRef = useRef([]);
+  toastsRef.current = toasts;
+  const timersRef = useRef(new Map());
 
   const removeToast = useCallback((id) => {
+    if (timersRef.current.has(id)) {
+      clearTimeout(timersRef.current.get(id));
+      timersRef.current.delete(id);
+    }
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
@@ -100,18 +109,51 @@ export function ToastProvider({ children }) {
       title,
       description,
       type = "info", // success, warn, danger, info, emergency
-      duration = 4500,
+      duration,
       action, // { label: 'Undo', onClick: () => {} }
     }) => {
+      // Info toasts auto-dismiss after 3s, other default to 4500ms
+      const effectiveDuration = duration !== undefined ? duration : (type === "info" ? 3000 : 4500);
+
+      // De-duplication: if a toast with the same title is already visible, refresh its timer and do not add another
+      const existing = toastsRef.current.find((t) => t.title && t.title === title);
+      if (existing) {
+        if (timersRef.current.has(existing.id)) {
+          clearTimeout(timersRef.current.get(existing.id));
+        }
+        if (effectiveDuration && effectiveDuration > 0) {
+          const timer = setTimeout(() => {
+            removeToast(existing.id);
+          }, effectiveDuration);
+          timersRef.current.set(existing.id, timer);
+        }
+        return existing.id;
+      }
+
       const id = `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
       const newToast = { id, title, description, type, action };
 
-      setToasts((prev) => [...prev, newToast]);
+      setToasts((prev) => {
+        // Limit visible toasts to 3 maximum (drop the oldest)
+        const updated = [...prev, newToast];
+        if (updated.length > 3) {
+          const dropped = updated.slice(0, updated.length - 3);
+          dropped.forEach((d) => {
+            if (timersRef.current.has(d.id)) {
+              clearTimeout(timersRef.current.get(d.id));
+              timersRef.current.delete(d.id);
+            }
+          });
+          return updated.slice(updated.length - 3);
+        }
+        return updated;
+      });
 
-      if (duration && duration > 0) {
-        setTimeout(() => {
+      if (effectiveDuration && effectiveDuration > 0) {
+        const timer = setTimeout(() => {
           removeToast(id);
-        }, duration);
+        }, effectiveDuration);
+        timersRef.current.set(id, timer);
       }
 
       return id;

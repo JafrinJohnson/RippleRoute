@@ -6,6 +6,7 @@
 
 import { buildPath, pointAtDistance, advanceRouteDistance } from "@/lib/routeAnimator";
 import { getRoadRoutes } from "@/lib/roadRouting";
+import demoRoutesData from "@/data/demoRoutes.json";
 
 // Peelamedu Primary Depot reference
 export const DEPOT_PEELAMEDU = {
@@ -17,7 +18,7 @@ export const DEPOT_PEELAMEDU = {
 
 // Initial Seed Deliveries (8 Coimbatore destinations from Peelamedu depot)
 // 2 medical (oxygen cylinders, insulin cold box); 2 food (dairy, vegetables); 4 normal
-const INITIAL_DELIVERIES = [
+export const INITIAL_DELIVERIES = [
   {
     id: "del-01",
     code: "DEL-GANDHI-01",
@@ -133,7 +134,7 @@ const INITIAL_DELIVERIES = [
 ];
 
 // Initial Seed Hazards (3 specified hazards)
-const INITIAL_HAZARDS = [
+export const INITIAL_HAZARDS = [
   {
     id: "haz-landslide-01",
     type: "landslide",
@@ -273,13 +274,23 @@ class MockStore {
     ];
 
     for (const d of rawFleet) {
-      // Fallback straight path initially
-      const straightPath = makeStraightPath(DEPOT_PEELAMEDU, d.destinationCoords);
-      const initialPt = pointAtDistance(straightPath, d.currentDistM % Math.max(1, straightPath.totalDistance));
+      // Use real pre-saved road route from demoRoutes.json
+      const savedRoute = demoRoutesData[d.deliveryId];
+      const roadCoords = savedRoute?.coords;
+      const roadPath = roadCoords && roadCoords.length >= 2
+        ? buildPath(roadCoords)
+        : makeStraightPath(DEPOT_PEELAMEDU, d.destinationCoords);
+
+      const offsetDist = d.currentDistM % Math.max(1, roadPath.totalDistance);
+      const initialPt = pointAtDistance(roadPath, offsetDist);
 
       this.simulatedDrivers.set(d.uid, {
         ...d,
-        path: straightPath,
+        path: roadPath,
+        currentDistM: offsetDist,
+        totalDistanceM: roadPath.totalDistance,
+        progress: roadPath.totalDistance > 0 ? offsetDist / roadPath.totalDistance : 0,
+        etaMinutes: Math.max(1, Math.round(((roadPath.totalDistance - offsetDist) / (d.speedKmh * 1000 / 60)) / 2.5)),
         lat: initialPt.lat,
         lng: initialPt.lng,
         heading: initialPt.heading,
@@ -287,36 +298,8 @@ class MockStore {
       });
     }
 
-    // Plan real road routes asynchronously once at start
-    this.fetchRealRoadRoutes();
-
-    // Start simulation ticker (1 second movement along routes)
+    // Start simulation ticker (1 second movement along real road routes)
     this.startSimulationTicker();
-  }
-
-  async fetchRealRoadRoutes() {
-    for (const driver of this.simulatedDrivers.values()) {
-      try {
-        const routes = await getRoadRoutes(DEPOT_PEELAMEDU, driver.destinationCoords, {
-          alternatives: false,
-        });
-
-        if (Array.isArray(routes) && routes.length > 0 && Array.isArray(routes[0].coords) && routes[0].coords.length > 1) {
-          const roadPath = buildPath(routes[0].coords);
-          if (roadPath && roadPath.totalDistance > 0) {
-            driver.path = roadPath;
-            // Update initial position along real road
-            const pt = pointAtDistance(roadPath, driver.currentDistM % roadPath.totalDistance);
-            driver.lat = pt.lat;
-            driver.lng = pt.lng;
-            driver.heading = pt.heading;
-          }
-        }
-      } catch (err) {
-        // Fallback straight lines remain active
-        console.warn(`[mockStore] road routing fallback for ${driver.name}:`, err?.message || err);
-      }
-    }
   }
 
   startSimulationTicker() {
@@ -330,7 +313,7 @@ class MockStore {
           driver.currentDistM = advanceRouteDistance(
             driver.currentDistM,
             driver.speedKmh,
-            2.2, // ~2.2x demo multiplier for visible smooth movement
+            3.0, // 3x demo multiplier for visible smooth movement
             1,
             driver.path.totalDistance,
             true
@@ -341,6 +324,9 @@ class MockStore {
           driver.lng = pt.lng;
           driver.heading = pt.heading;
           driver.updatedAt = Date.now();
+          driver.progress = driver.path.totalDistance > 0 ? driver.currentDistM / driver.path.totalDistance : 0;
+          const remainingM = Math.max(0, driver.path.totalDistance - driver.currentDistM);
+          driver.etaMinutes = Math.max(1, Math.round(remainingM / (driver.speedKmh * 1000 / 60) / 3.0));
         }
       } catch (err) {
         console.error("[mockStore] sim ticker error:", err);
@@ -355,6 +341,19 @@ class MockStore {
 
   getDeliveries() {
     return JSON.parse(JSON.stringify(this.deliveries));
+  }
+
+  subscribeDeliveries(cb) {
+    if (typeof cb !== "function") return () => {};
+    cb(this.getDeliveries());
+    const intervalId = setInterval(() => {
+      try {
+        cb(this.getDeliveries());
+      } catch (err) {
+        console.error("[subscribeDeliveries] callback error:", err);
+      }
+    }, 1000);
+    return () => clearInterval(intervalId);
   }
 
   updateDelivery(id, patch) {
@@ -438,6 +437,10 @@ class MockStore {
         lat: driver.lat,
         lng: driver.lng,
         heading: driver.heading,
+        currentDistM: driver.currentDistM,
+        totalDistanceM: driver.totalDistanceM,
+        progress: driver.progress,
+        etaMinutes: driver.etaMinutes,
         updatedAt: driver.updatedAt,
       });
     }
@@ -448,6 +451,19 @@ class MockStore {
     }
 
     return Array.from(combined.values());
+  }
+
+  subscribeLiveLocations(cb) {
+    if (typeof cb !== "function") return () => {};
+    cb(this.getLiveLocations());
+    const intervalId = setInterval(() => {
+      try {
+        cb(this.getLiveLocations());
+      } catch (err) {
+        console.error("[subscribeLiveLocations] callback error:", err);
+      }
+    }, 1000);
+    return () => clearInterval(intervalId);
   }
 
   addMessage(fromUid, toUid, text) {

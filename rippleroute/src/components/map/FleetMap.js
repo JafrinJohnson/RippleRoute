@@ -57,6 +57,7 @@ const BASE_LAYERS = {
 };
 
 // SVG truck icon string for vehicle marker
+// SVG truck icon string for vehicle marker (fallback)
 const TRUCK_SVG = `
 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
   <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/>
@@ -69,18 +70,23 @@ const TRUCK_SVG = `
 
 /**
  * Helper to build custom vehicle DivIcon
+ * Normal drivers show a 🚚 truck icon; only emergency users show 🏥 (medical) or 🍱 (food).
  */
 function createVehicleDivIcon(vehicle, isSelected) {
   const status = vehicle.status || "on_time";
   const role = vehicle.role || "driver";
-  const priority = vehicle.priority || "normal";
-  const isEmergency = role === "emergency" || priority === "medical" || priority === "food" || vehicle.isEmergency;
-  const isMedical = priority === "medical" || (vehicle.cargoType && vehicle.cargoType.toLowerCase().includes("med"));
-  const emergencyEmoji = isMedical ? "🏥" : "🍱";
+  const priority = (vehicle.priority || "").toLowerCase();
+  const cargo = (vehicle.cargoType || "").toLowerCase();
+  
+  // Explicit emergency check: only emergency role or explicit flag
+  const isEmergency = role === "emergency" || vehicle.isEmergency === true;
+  const isFood = priority === "food" || priority === "perishable" || cargo.includes("food") || cargo.includes("perishable");
+  
+  // Normal drivers show a 🚚 truck icon; only emergency users show 🏥 (medical) or 🍱 (food)
+  const truckGlyph = isEmergency ? (isFood ? "🍱" : "🏥") : "🚚";
 
   let color = "#10B981"; // on_time / safe
   let bgRgba = "rgba(16, 185, 129, 0.25)";
-  let ringClass = "";
 
   if (status === "at_risk") {
     color = "#F59E0B";
@@ -102,10 +108,6 @@ function createVehicleDivIcon(vehicle, isSelected) {
     ? `<span class="emergency-pulse-ring" style="position: absolute; inset: -5px; border-radius: 9999px; border: 2px solid #EF4444; pointer-events: none;"></span>`
     : "";
 
-  const emergencyBadgeHtml = isEmergency
-    ? `<span style="position: absolute; -top: 6px; -right: 6px; font-size: 11px; line-height: 1; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.8));">${emergencyEmoji}</span>`
-    : "";
-
   const html = `
     <div style="position: relative; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;">
       ${pulseRingHtml}
@@ -114,9 +116,9 @@ function createVehicleDivIcon(vehicle, isSelected) {
         display: flex;
         align-items: center;
         gap: 5px;
-        padding: 4px 8px;
+        padding: 4px 9px;
         border-radius: 9999px;
-        background: rgba(15, 23, 42, 0.88);
+        background: rgba(15, 23, 42, 0.90);
         backdrop-filter: blur(8px);
         -webkit-backdrop-filter: blur(8px);
         border: 1.5px solid ${color};
@@ -129,13 +131,12 @@ function createVehicleDivIcon(vehicle, isSelected) {
         transition: all 0.2s ease;
         ${selectedStyle}
       ">
-        <span class="truck-icon-rotator" style="display: inline-flex; align-items: center; justify-content: center; transform: rotate(${heading}deg); transform-origin: center; transition: transform 0.3s ease;">
-          ${TRUCK_SVG}
+        <span class="truck-icon-rotator" style="display: inline-flex; align-items: center; justify-content: center; font-size: 14px; line-height: 1; transform: rotate(${heading}deg); transform-origin: center; transition: transform 0.3s ease;">
+          ${truckGlyph}
         </span>
-        <span style="color: #F8FAFC; font-size: 10px; max-width: 80px; overflow: hidden; text-overflow: ellipsis;">
+        <span style="color: #F8FAFC; font-size: 11px; max-width: 85px; overflow: hidden; text-overflow: ellipsis; font-weight: 700;">
           ${vehicle.name ? vehicle.name.split(" ")[0] : "Unit"}
         </span>
-        ${emergencyBadgeHtml}
       </div>
     </div>
   `;
@@ -349,6 +350,15 @@ function AnimatedVehicleMarker({ vehicle, isSelected, onClick }) {
       cancelAnimationFrame(animationRef.current);
     }
 
+    if (typeof document !== "undefined" && document.hidden) {
+      currentPosRef.current = [targetLat, targetLng];
+      currentHeadingRef.current = targetHeading;
+      if (markerRef.current) {
+        markerRef.current.setLatLng([targetLat, targetLng]);
+      }
+      return;
+    }
+
     const startTime = performance.now();
     const duration = 1000; // 1s smooth interpolation
 
@@ -434,6 +444,12 @@ function AnimatedVehicleMarker({ vehicle, isSelected, onClick }) {
               {vehicle.cargoType}
             </div>
           )}
+          {(vehicle.progress !== undefined || vehicle.etaMinutes !== undefined) && (
+            <div className="text-[10px] text-cyan-300 font-mono mt-1 border-t border-white/10 pt-1 flex items-center justify-between gap-2">
+              <span>{Math.round((vehicle.progress || 0) * 100)}% progress</span>
+              <span>ETA: {vehicle.etaMinutes ? `~${vehicle.etaMinutes}m` : (vehicle.etaText || "--")}</span>
+            </div>
+          )}
         </div>
       </Tooltip>
     </Marker>
@@ -457,16 +473,54 @@ function FlyToController({ flyTo }) {
 }
 
 /**
- * Controller to fit map view to specific coordinates (e.g. QARS best route)
+ * Controller to smoothly follow a vehicle's moving position
+ * During a trip with "Follow truck" on: smoothly pan to the truck at zoom 15.
+ * Never auto-zoom on every position update when Follow is off.
+ */
+function FollowController({ followCoords, enabled = true }) {
+  const map = useMap();
+  const hasSetInitialZoomRef = useRef(false);
+
+  useEffect(() => {
+    if (!enabled) {
+      hasSetInitialZoomRef.current = false;
+      return;
+    }
+    if (!followCoords) return;
+    const lat = Array.isArray(followCoords) ? followCoords[0] : followCoords.lat;
+    const lng = Array.isArray(followCoords) ? followCoords[1] : followCoords.lng;
+    if (typeof lat !== "number" || typeof lng !== "number") return;
+
+    if (!hasSetInitialZoomRef.current) {
+      hasSetInitialZoomRef.current = true;
+      map.setView([lat, lng], 15, { animate: true, duration: 0.5 });
+    } else {
+      map.panTo([lat, lng], { animate: true, duration: 0.4 });
+    }
+  }, [followCoords, enabled, map]);
+  return null;
+}
+
+/**
+ * Controller to fit map view to specific coordinates (e.g. QARS best route, initial bounds)
  */
 function FitBoundsController({ fitBoundsCoords }) {
   const map = useMap();
+  const lastKeyRef = useRef(null);
+
   useEffect(() => {
     if (!fitBoundsCoords || !Array.isArray(fitBoundsCoords) || fitBoundsCoords.length < 2) return;
+    const first = fitBoundsCoords[0];
+    const mid = fitBoundsCoords[Math.floor(fitBoundsCoords.length / 2)];
+    const last = fitBoundsCoords[fitBoundsCoords.length - 1];
+    const key = `${fitBoundsCoords.length}-${first?.[0]}-${first?.[1]}-${mid?.[0]}-${mid?.[1]}-${last?.[0]}-${last?.[1]}`;
+    if (lastKeyRef.current === key) return;
+    lastKeyRef.current = key;
+
     try {
       const bounds = L.latLngBounds(fitBoundsCoords);
       if (bounds.isValid()) {
-        map.fitBounds(bounds, { padding: [60, 60], maxZoom: 15, animate: true, duration: 1.2 });
+        map.fitBounds(bounds, { padding: [60, 60], maxZoom: 15, animate: true, duration: 1.0 });
       }
     } catch (e) {
       console.warn("Could not fit route bounds:", e);
@@ -554,6 +608,8 @@ export default function FleetMap({
   deliveries = [],
   selectedUid = null,
   flyTo = null,
+  followCoords = null,
+  followEnabled = true,
   fitToRoutes = false,
   fitBoundsCoords = null,
   onMapClick = null,
@@ -697,6 +753,7 @@ export default function FleetMap({
 
         {/* Controllers */}
         <FlyToController flyTo={flyTo} />
+        <FollowController followCoords={followCoords} enabled={followEnabled} />
         <FitRoutesController fitToRoutes={fitToRoutes} routes={routes} />
         <FitBoundsController fitBoundsCoords={fitBoundsCoords} />
         <MapClickHandler onMapClick={onMapClick} />
@@ -723,6 +780,9 @@ export default function FleetMap({
           const isHighlighted = !!route.highlighted || !!route.isHighlighted;
           const isDashed = route.dashed !== undefined ? !!route.dashed : !!route.isDashed;
           const routeColor = route.color || (isHighlighted ? "#00E5FF" : "#7C5CFF");
+          const activeCoords = (route.remainingCoords && route.remainingCoords.length >= 2)
+            ? route.remainingCoords
+            : coords;
 
           return (
             <React.Fragment key={route.id || Math.random()}>
@@ -756,10 +816,26 @@ export default function FleetMap({
                 />
               )}
 
-              {/* Glow Polyline underneath for highlighted route */}
+              {/* Completed dim segment */}
+              {route.completedCoords && route.completedCoords.length >= 2 && (
+                <Polyline
+                  positions={route.completedCoords}
+                  smoothFactor={0}
+                  noClip={false}
+                  pathOptions={{
+                    color: "#64748B",
+                    weight: 3.5,
+                    opacity: 0.35,
+                    lineCap: "round",
+                    lineJoin: "round",
+                  }}
+                />
+              )}
+
+              {/* Glow Polyline underneath for highlighted remaining route */}
               {isHighlighted && (
                 <Polyline
-                  positions={coords}
+                  positions={activeCoords}
                   smoothFactor={0}
                   noClip={false}
                   pathOptions={{
@@ -771,9 +847,9 @@ export default function FleetMap({
                   }}
                 />
               )}
-              {/* Foreground Polyline */}
+              {/* Foreground Polyline for remaining route */}
               <Polyline
-                positions={coords}
+                positions={activeCoords}
                 smoothFactor={0}
                 noClip={false}
                 pathOptions={{

@@ -25,6 +25,7 @@ import {
 } from "@/services/api";
 import { haversineMeters, minDistanceToPolylineMeters } from "@/lib/geo";
 import { buildPath, pointAtDistance } from "@/lib/routeAnimator";
+import useRouteMover from "@/hooks/useRouteMover";
 import {
   Truck,
   Navigation,
@@ -40,6 +41,8 @@ import {
   Volume2,
   VolumeX,
   Play,
+  Pause,
+  RotateCcw,
   Square,
   MessageSquare,
   Send,
@@ -84,16 +87,30 @@ export default function DriverDashboard({ mode = "driver" }) {
   const [activeHazardAlert, setActiveHazardAlert] = useState(null);
 
   // State: Position & Telemetry
-  const [startLocationType, setStartLocationType] = useState("depot"); // "depot" | "gps"
+  const [startLocationType, setStartLocationType] = useState(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = localStorage.getItem("rippleroute_start_location");
+        if (saved === "gps" || saved === "depot") return saved;
+      } catch (e) {
+        console.warn("Failed to read start location from localStorage:", e);
+      }
+    }
+    return "depot";
+  });
   const [currentPosition, setCurrentPosition] = useState({
     lat: DEPOT_PEELAMEDU.lat,
     lng: DEPOT_PEELAMEDU.lng,
   });
   const [currentHeading, setCurrentHeading] = useState(45);
   const [tripStatus, setTripStatus] = useState("open"); // "open" | "in_transit" | "delivered" | "delayed" | "issue"
+  const [demoSpeedFactor, setDemoSpeedFactor] = useState(10); // 1x, 5x, 10x (default 10x for demo)
+  const [followTruck, setFollowTruck] = useState(true); // Follow truck toggle (default on)
   const [isSimulating, setIsSimulating] = useState(false);
   const simulationStepRef = useRef(0);
   const lastLocationUpdateRef = useRef(0);
+  const gpsTimeoutRef = useRef(null);
+  const hasFittedInitialBoundsRef = useRef(false);
 
   // State: Routing & QARS
   const [plannedRoutes, setPlannedRoutes] = useState([]);
@@ -101,50 +118,214 @@ export default function DriverDashboard({ mode = "driver" }) {
   const [isPlanningRoutes, setIsPlanningRoutes] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [qarsResult, setQarsResult] = useState(null);
-  const [bestRouteBoundsCoords, setBestRouteBoundsCoords] = useState(null);
+  const [mapFitBoundsCoords, setMapFitBoundsCoords] = useState(null);
+
+  // In-flight guards and tracking refs
+  const isPlanningRef = useRef(false);
+  const isOptimizingRef = useRef(false);
+  const lastPlannedDestinationIdRef = useRef(null);
+
+  // Value refs for decoupled effects & async actions
+  const currentPositionRef = useRef(currentPosition);
+  useEffect(() => {
+    currentPositionRef.current = currentPosition;
+  }, [currentPosition]);
+
+  const currentHeadingRef = useRef(currentHeading);
+  useEffect(() => {
+    currentHeadingRef.current = currentHeading;
+  }, [currentHeading]);
+
+  const selectedDeliveryRef = useRef(selectedDelivery);
+  useEffect(() => {
+    selectedDeliveryRef.current = selectedDelivery;
+  }, [selectedDelivery]);
+
+  const hazardsRef = useRef(hazards);
+  useEffect(() => {
+    hazardsRef.current = hazards;
+  }, [hazards]);
+
+  const plannedRoutesRef = useRef(plannedRoutes);
+  useEffect(() => {
+    plannedRoutesRef.current = plannedRoutes;
+  }, [plannedRoutes]);
+
+  const qarsResultRef = useRef(qarsResult);
+  useEffect(() => {
+    qarsResultRef.current = qarsResult;
+  }, [qarsResult]);
+
+  const selectedRouteIndexRef = useRef(selectedRouteIndex);
+  useEffect(() => {
+    selectedRouteIndexRef.current = selectedRouteIndex;
+  }, [selectedRouteIndex]);
+
+  const moverRef = useRef(null);
+  const demoSpeedFactorRef = useRef(demoSpeedFactor);
+  useEffect(() => {
+    demoSpeedFactorRef.current = demoSpeedFactor;
+  }, [demoSpeedFactor]);
 
   // Toggle Start Location: Depot vs Browser GPS
   const handleToggleStartLocation = useCallback((type) => {
-    setStartLocationType(type);
+    if (gpsTimeoutRef.current) {
+      clearTimeout(gpsTimeoutRef.current);
+      gpsTimeoutRef.current = null;
+    }
+
+    try {
+      localStorage.setItem("rippleroute_start_location", type);
+    } catch (e) {
+      console.warn("Failed to save start location to localStorage:", e);
+    }
+
+    // When the start mode changes: clear old routes, and require "Plan route" again
+    setPlannedRoutes([]);
+    setQarsResult(null);
+    setSelectedRouteIndex(0);
+    setMapFitBoundsCoords(null);
+    lastPlannedDestinationIdRef.current = null;
+
     if (type === "depot") {
-      setCurrentPosition({ lat: DEPOT_PEELAMEDU.lat, lng: DEPOT_PEELAMEDU.lng });
+      setStartLocationType("depot");
+      const depotPos = { lat: DEPOT_PEELAMEDU.lat, lng: DEPOT_PEELAMEDU.lng };
+      // Move truck marker there immediately
+      setCurrentPosition(depotPos);
       toast.info(
         locale === "ta"
           ? "தொடக்க இடம்: கோவைஸ்விப்ட் டிப்போ, பீளமேடு"
           : "Start point: KovaiSwift Depot, Peelamedu"
       );
-    } else if (type === "gps") {
-      if (typeof window !== "undefined" && navigator?.geolocation) {
-        toast.info(locale === "ta" ? "GPS கண்டறியப்படுகிறது..." : "Acquiring browser GPS...");
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            const lat = pos.coords.latitude;
-            const lng = pos.coords.longitude;
-            setCurrentPosition({ lat, lng });
-            toast.success(
-              locale === "ta"
-                ? "உங்கள் ஜிபிஎஸ் இருப்பிடம் அமைக்கப்பட்டது"
-                : `Acquired GPS location: [${lat.toFixed(4)}, ${lng.toFixed(4)}]`
-            );
-          },
-          (err) => {
-            console.warn("GPS error:", err?.message || err);
-            toast.warning(
-              locale === "ta"
-                ? "GPS கிடைக்கவில்லை — டிப்போ இருப்பிடம் தொடர்கிறது"
-                : "Could not access GPS — keeping Depot as start point"
-            );
-            setStartLocationType("depot");
-            setCurrentPosition({ lat: DEPOT_PEELAMEDU.lat, lng: DEPOT_PEELAMEDU.lng });
-          },
-          { enableHighAccuracy: true, timeout: 8000 }
-        );
-      } else {
-        toast.warning("Browser Geolocation is not supported");
-        setStartLocationType("depot");
+      if (deliveries.length > 0) {
+        setMapFitBoundsCoords([
+          [depotPos.lat, depotPos.lng],
+          [DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng],
+          ...deliveries.map((d) => [d.lat, d.lng]),
+        ]);
       }
+    } else if (type === "gps") {
+      setStartLocationType("gps");
+      if (typeof window === "undefined" || !navigator?.geolocation) {
+        toast.warning(
+          locale === "ta"
+            ? "உலாவி GPS ஆதரிக்கப்படவில்லை — டிப்போவிற்கு மாற்றப்பட்டது"
+            : "Browser GPS not supported — switched back to Depot"
+        );
+        setStartLocationType("depot");
+        try { localStorage.setItem("rippleroute_start_location", "depot"); } catch (e) {}
+        setCurrentPosition({ lat: DEPOT_PEELAMEDU.lat, lng: DEPOT_PEELAMEDU.lng });
+        return;
+      }
+
+      toast.info(locale === "ta" ? "GPS கண்டறியப்படுகிறது..." : "Acquiring browser GPS...");
+
+      let resolved = false;
+
+      // 5 s timeout guard: if GPS not available within 5 s, show toast and switch back to Depot
+      gpsTimeoutRef.current = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          toast.warning(
+            locale === "ta"
+              ? "GPS நேரம் முடிந்தது (5 விநாடிகள்) — டிப்போவிற்கு மாற்றப்பட்டது"
+              : "GPS not available within 5 s — switched back to Depot"
+          );
+          setStartLocationType("depot");
+          try { localStorage.setItem("rippleroute_start_location", "depot"); } catch (e) {}
+          setCurrentPosition({ lat: DEPOT_PEELAMEDU.lat, lng: DEPOT_PEELAMEDU.lng });
+          if (deliveries.length > 0) {
+            setMapFitBoundsCoords([
+              [DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng],
+              ...deliveries.map((d) => [d.lat, d.lng]),
+            ]);
+          }
+        }
+      }, 5000);
+
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (resolved) return;
+          resolved = true;
+          if (gpsTimeoutRef.current) {
+            clearTimeout(gpsTimeoutRef.current);
+            gpsTimeoutRef.current = null;
+          }
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const newPos = { lat, lng };
+          // Move truck marker there immediately
+          setCurrentPosition(newPos);
+          if (typeof pos.coords.heading === "number" && !isNaN(pos.coords.heading)) {
+            setCurrentHeading(pos.coords.heading);
+          }
+          if (deliveries.length > 0) {
+            setMapFitBoundsCoords([
+              [newPos.lat, newPos.lng],
+              [DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng],
+              ...deliveries.map((d) => [d.lat, d.lng]),
+            ]);
+          }
+          toast.success(
+            locale === "ta"
+              ? "உங்கள் ஜிபிஎஸ் இருப்பிடம் அமைக்கப்பட்டது"
+              : `Acquired GPS location: [${lat.toFixed(4)}, ${lng.toFixed(4)}]`
+          );
+        },
+        (err) => {
+          if (resolved) return;
+          resolved = true;
+          if (gpsTimeoutRef.current) {
+            clearTimeout(gpsTimeoutRef.current);
+            gpsTimeoutRef.current = null;
+          }
+          console.warn("GPS error:", err?.message || err);
+          toast.warning(
+            locale === "ta"
+              ? "GPS கிடைக்கவில்லை — டிப்போவிற்கு மாற்றப்பட்டது"
+              : "Could not access GPS — switched back to Depot"
+          );
+          setStartLocationType("depot");
+          try { localStorage.setItem("rippleroute_start_location", "depot"); } catch (e) {}
+          setCurrentPosition({ lat: DEPOT_PEELAMEDU.lat, lng: DEPOT_PEELAMEDU.lng });
+          if (deliveries.length > 0) {
+            setMapFitBoundsCoords([
+              [DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng],
+              ...deliveries.map((d) => [d.lat, d.lng]),
+            ]);
+          }
+        },
+        { enableHighAccuracy: true, timeout: 5000 }
+      );
     }
-  }, [locale, toast]);
+  }, [deliveries, locale, toast]);
+
+  // If saved start mode is GPS, attempt GPS acquisition with 5s timeout on mount
+  useEffect(() => {
+    if (startLocationType === "gps") {
+      handleToggleStartLocation("gps");
+    }
+    return () => {
+      if (gpsTimeoutRef.current) {
+        clearTimeout(gpsTimeoutRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Map camera on page load: fit bounds to the truck + depot + driver's deliveries (padding 60px)
+  useEffect(() => {
+    if (!loadingDeliveries && deliveries.length > 0 && !hasFittedInitialBoundsRef.current) {
+      hasFittedInitialBoundsRef.current = true;
+      const initialPoints = [
+        [currentPosition.lat, currentPosition.lng],
+        [DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng],
+        ...deliveries.map((d) => [d.lat, d.lng]),
+      ];
+      setMapFitBoundsCoords(initialPoints);
+    }
+  }, [loadingDeliveries, deliveries, currentPosition]);
+
 
   // State: Safety & Advisory
   const [advisoryLines, setAdvisoryLines] = useState({ en: [], ta: [] });
@@ -241,21 +422,20 @@ export default function DriverDashboard({ mode = "driver" }) {
             const currentH = updatedHazards.find((h) => h.id === prevH.id);
             if (currentH && !currentH.active) {
               toast.success(locale === "ta" ? "பாதை பாதுகாப்பானது: தடை அகற்றப்பட்டது" : "Route cleared: Active hazard resolved");
-              if (activeHazardAlert && activeHazardAlert.id === prevH.id) {
-                setActiveHazardAlert(null);
-              }
+              setActiveHazardAlert((alert) => (alert && alert.id === prevH.id ? null : alert));
             }
           }
         });
 
         // Check for new hazards near driver or touching route
         const activeList = updatedHazards.filter((h) => h.active !== false);
-        const currentRoute = qarsResult?.best?.coords || plannedRoutes[selectedRouteIndex]?.coords || [];
+        const currPos = currentPositionRef.current;
+        const currentRoute = qarsResultRef.current?.best?.coords || plannedRoutesRef.current[selectedRouteIndexRef.current]?.coords || [];
 
         activeList.forEach((h) => {
           if (!seenHazardIdsRef.current.has(h.id)) {
             const hPt = { lat: h.lat, lng: h.lng };
-            const distToDriver = haversineMeters(currentPosition, hPt);
+            const distToDriver = currPos ? haversineMeters(currPos, hPt) : Infinity;
             const distToRoute = currentRoute.length > 0 ? minDistanceToPolylineMeters(hPt, currentRoute) : Infinity;
 
             const isNearDriver = distToDriver <= 1000;
@@ -279,7 +459,7 @@ export default function DriverDashboard({ mode = "driver" }) {
     });
 
     return () => unsubscribe();
-  }, [currentPosition, plannedRoutes, qarsResult, selectedRouteIndex, playHazardBeep, triggerHaptic, locale, toast, activeHazardAlert]);
+  }, [locale, playHazardBeep, triggerHaptic, toast]);
 
   // Subscribe to Dispatcher Messages
   useEffect(() => {
@@ -291,13 +471,15 @@ export default function DriverDashboard({ mode = "driver" }) {
   }, [profile]);
 
   // Native Geolocation Watcher
+  // Do not let GPS updates move the truck while "Depot" is selected or while a simulated trip is running
   useEffect(() => {
     if (typeof window === "undefined" || !navigator?.geolocation) return;
-    if (isSimulating) return; // Simulation takes precedence
+    if (startLocationType !== "gps") return;
+    if (tripStatus === "in_transit" || moverRef.current?.running || isSimulating) return;
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        if (!isSimulating) {
+        if (startLocationType === "gps" && tripStatus !== "in_transit" && !moverRef.current?.running && !isSimulating) {
           const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
           setCurrentPosition(newPos);
           if (typeof pos.coords.heading === "number" && !isNaN(pos.coords.heading)) {
@@ -306,7 +488,7 @@ export default function DriverDashboard({ mode = "driver" }) {
         }
       },
       (err) => {
-        // Quietly fallback to depot
+        // Quietly ignore watch errors
       },
       { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
     );
@@ -314,36 +496,33 @@ export default function DriverDashboard({ mode = "driver" }) {
     return () => {
       navigator.geolocation.clearWatch(watchId);
     };
-  }, [isSimulating]);
+  }, [startLocationType, tripStatus, isSimulating]);
 
-  // Throttled Live Location Broadcaster (<= every 3s)
-  useEffect(() => {
-    const now = Date.now();
-    if (now - lastLocationUpdateRef.current >= 3000) {
-      lastLocationUpdateRef.current = now;
-      updateLiveLocation(profile, {
-        lat: currentPosition.lat,
-        lng: currentPosition.lng,
-        heading: currentHeading,
-        status: tripStatus,
-        destination: selectedDelivery ? `${selectedDelivery.code} - ${selectedDelivery.customerName}` : null,
-      });
-    }
-  }, [currentPosition, currentHeading, tripStatus, selectedDelivery, profile]);
+  // Route Planning Logic (Runs ONLY on explicit user trigger, destination change, or alternative route)
+  const handlePlanRoute = useCallback(async (deliveryOverride = null, fromPosOverride = null) => {
+    const targetDelivery = deliveryOverride || selectedDeliveryRef.current;
+    if (!targetDelivery) return;
+    if (isPlanningRef.current) return;
 
-  // Route Planning Logic
-  const handlePlanRoute = useCallback(async () => {
-    if (!selectedDelivery) return;
+    isPlanningRef.current = true;
+    setIsPlanningRoutes(true);
+    setQarsResult(null);
+
+    const fromPt = fromPosOverride || currentPositionRef.current || DEPOT_PEELAMEDU;
+
     try {
-      setIsPlanningRoutes(true);
-      setQarsResult(null);
-      const res = await planRoutes(currentPosition, {
-        lat: selectedDelivery.lat,
-        lng: selectedDelivery.lng,
+      const res = await planRoutes(fromPt, {
+        lat: targetDelivery.lat,
+        lng: targetDelivery.lng,
       });
       if (res && Array.isArray(res.routes) && res.routes.length > 0) {
         setPlannedRoutes(res.routes);
         setSelectedRouteIndex(0);
+        // After Plan route: fitBounds to all candidate routes (padding 60 px)
+        const allCandidateCoords = res.routes.flatMap((r) => r.coords || []);
+        if (allCandidateCoords.length > 1) {
+          setMapFitBoundsCoords(allCandidateCoords);
+        }
         toast.info(
           locale === "ta"
             ? `${res.routes.length} சாத்தியமான வழிகள் கண்டறியப்பட்டன`
@@ -366,41 +545,51 @@ export default function DriverDashboard({ mode = "driver" }) {
           : "Could not load road routes — check internet and press Retry"
       );
     } finally {
+      isPlanningRef.current = false;
       setIsPlanningRoutes(false);
     }
-  }, [selectedDelivery, currentPosition, locale, toast]);
+  }, [locale, toast]);
 
-
-  // Automatically plan route when delivery selection changes
+  // Automatically plan route when delivery selection changes (depend ONLY on destination id, at most once per destination)
+  const selectedDeliveryId = selectedDelivery?.id;
   useEffect(() => {
-    if (selectedDelivery) {
-      handlePlanRoute();
-    }
-  }, [selectedDelivery, handlePlanRoute]);
+    if (!selectedDeliveryId) return;
+    if (lastPlannedDestinationIdRef.current === selectedDeliveryId) return;
+    lastPlannedDestinationIdRef.current = selectedDeliveryId;
+    handlePlanRoute();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDeliveryId]);
 
   // QARS Quantum-Inspired Route Optimization
   const handleRunQars = useCallback(async () => {
-    if (!plannedRoutes.length || !selectedDelivery) return;
+    const targetDelivery = selectedDeliveryRef.current;
+    const currentRoutes = plannedRoutesRef.current;
+    if (!currentRoutes.length || !targetDelivery) return;
+    if (isOptimizingRef.current) return;
+
+    isOptimizingRef.current = true;
     try {
       setIsOptimizing(true);
+      const currPos = currentPositionRef.current || DEPOT_PEELAMEDU;
       const res = await runQars({
-        from: currentPosition,
-        to: { lat: selectedDelivery.lat, lng: selectedDelivery.lng },
-        routes: plannedRoutes,
-        hazards,
-        priority: selectedDelivery.priority,
+        from: currPos,
+        to: { lat: targetDelivery.lat, lng: targetDelivery.lng },
+        routes: currentRoutes,
+        hazards: hazardsRef.current,
+        priority: targetDelivery.priority,
       });
 
       setQarsResult(res);
 
       // Find index of best route and set route bounds to fit map view
       if (res.best) {
-        const bestIdx = plannedRoutes.findIndex((r) => r.id === res.best.id);
+        const bestIdx = currentRoutes.findIndex((r) => r.id === res.best.id);
         if (bestIdx !== -1) {
           setSelectedRouteIndex(bestIdx);
         }
+        // After Optimize with QARS: fitBounds to the best route (padding 60 px)
         if (Array.isArray(res.best.coords) && res.best.coords.length > 1) {
-          setBestRouteBoundsCoords(res.best.coords);
+          setMapFitBoundsCoords(res.best.coords);
         }
       }
 
@@ -408,7 +597,7 @@ export default function DriverDashboard({ mode = "driver" }) {
       const bestHits = res.best?.hits || [];
       const adv = await getAdvisory({
         hazardsOnRoute: bestHits,
-        rain: hazards.some((h) => h.active && h.type === "rain"),
+        rain: hazardsRef.current.some((h) => h.active && h.type === "rain"),
         lang: locale,
       });
       setAdvisoryLines(adv);
@@ -422,9 +611,10 @@ export default function DriverDashboard({ mode = "driver" }) {
       console.error("QARS error:", err);
       toast.error(locale === "ta" ? "QARS இயக்கத்தில் பிழை" : "QARS optimization failed");
     } finally {
+      isOptimizingRef.current = false;
       setIsOptimizing(false);
     }
-  }, [plannedRoutes, selectedDelivery, currentPosition, hazards, locale, toast]);
+  }, [locale, toast]);
 
   // Speech Synthesis for Safety Advisory
   const toggleSpeech = useCallback(() => {
@@ -455,40 +645,168 @@ export default function DriverDashboard({ mode = "driver" }) {
     window.speechSynthesis.speak(utterance);
   }, [isSpeaking, advisoryLines, locale, toast]);
 
+  // Active selected or QARS best road route
+  const activeRoute = qarsResult?.best || plannedRoutes[selectedRouteIndex];
+  const moverCoords = useMemo(() => {
+    return activeRoute?.coords || [];
+  }, [activeRoute]);
+
+  // Delivered callback when mover reaches the destination
+  const handleTripFinished = useCallback(async () => {
+    setTripStatus("delivered");
+    if (selectedDelivery) {
+      await updateDelivery(selectedDelivery.id, { status: "delivered" });
+      refreshDeliveries();
+      toast.success(
+        locale === "ta"
+          ? `விநியோகம் முடிந்தது! ${selectedDelivery.code} இலக்கை அடைந்தது.`
+          : `Package ${selectedDelivery.code} delivered! Destination reached.`
+      );
+    }
+  }, [selectedDelivery, refreshDeliveries, locale, toast]);
+
+  // Shared road movement engine hook (Advances frame-by-frame along OSRM road geometry)
+  const mover = useRouteMover(moverCoords, {
+    speedKmh: 40,
+    demoSpeedFactor,
+    loop: false,
+    autoStart: false,
+    onEnd: handleTripFinished,
+  });
+
+  moverRef.current = mover;
+
+  // Keep truck position and road heading synced with mover
+  useEffect(() => {
+    if (mover.position && (mover.running || tripStatus === "in_transit")) {
+      setCurrentPosition({ lat: mover.position.lat, lng: mover.position.lng });
+      if (typeof mover.position.heading === "number") {
+        setCurrentHeading(mover.position.heading);
+      }
+    }
+  }, [mover.position, mover.running, tripStatus]);
+
   // Trip Status actions
   const handleStartTrip = async () => {
-    if (!selectedDelivery) return;
+    const targetDelivery = selectedDeliveryRef.current;
+    if (!targetDelivery) return;
     try {
       setTripStatus("in_transit");
-      await updateDelivery(selectedDelivery.id, { status: "in_transit" });
+      await updateDelivery(targetDelivery.id, { status: "in_transit" });
       refreshDeliveries();
-      toast.info(locale === "ta" ? "பயணம் தொடங்கியது" : `Trip started for ${selectedDelivery.code}`);
+      mover.start();
+      toast.info(locale === "ta" ? "பயணம் தொடங்கியது" : `Trip started for ${targetDelivery.code}`);
     } catch (err) {
       console.error("Start trip error:", err?.message || err);
       toast.error(locale === "ta" ? "பயணத்தை தொடங்குவதில் பிழை" : "Failed to start trip");
     }
   };
 
+  const handleTogglePause = () => {
+    if (mover.running) {
+      mover.pause();
+      toast.info(locale === "ta" ? "பயணம் இடைநிறுத்தப்பட்டது" : "Trip paused");
+    } else {
+      mover.start();
+      toast.info(locale === "ta" ? "பயணம் தொடர்கிறது" : "Trip resumed");
+    }
+  };
+
+  const handleResetTrip = () => {
+    mover.reset();
+    setTripStatus("open");
+    toast.info(locale === "ta" ? "பயணம் மீட்டமைக்கப்பட்டது" : "Trip reset to start");
+  };
+
   const handleMarkDelivered = async () => {
-    if (!selectedDelivery) return;
+    const targetDelivery = selectedDeliveryRef.current;
+    if (!targetDelivery) return;
     try {
+      mover.pause();
       setTripStatus("delivered");
-      await updateDelivery(selectedDelivery.id, { status: "delivered" });
+      await updateDelivery(targetDelivery.id, { status: "delivered" });
       refreshDeliveries();
-      toast.success(locale === "ta" ? "வெற்றிகரமாக விநியோகிக்கப்பட்டது!" : `Package ${selectedDelivery.code} marked as delivered!`);
+      toast.success(locale === "ta" ? "வெற்றிகரமாக விநியோகிக்கப்பட்டது!" : `Package ${targetDelivery.code} marked as delivered!`);
     } catch (err) {
       console.error("Mark delivered error:", err?.message || err);
       toast.error(locale === "ta" ? "விநியோகம் பதிவு செய்வதில் பிழை" : "Failed to mark as delivered");
     }
   };
 
+  // Reroute from CURRENT position when alternative route is chosen on hazard alert
+  const handleRerouteFromCurrentPosition = useCallback(async () => {
+    const targetDelivery = selectedDeliveryRef.current;
+    if (!targetDelivery) return;
+    if (isPlanningRef.current || isOptimizingRef.current) return;
+
+    isPlanningRef.current = true;
+    isOptimizingRef.current = true;
+
+    try {
+      setActiveHazardAlert(null);
+      setIsPlanningRoutes(true);
+      toast.info(
+        locale === "ta"
+          ? "தற்போதைய இடத்திலிருந்து புதிய மாற்றுப்பாதை கணக்கிடப்படுகிறது..."
+          : "Calculating alternative route from current position..."
+      );
+      const currPos = currentPositionRef.current || DEPOT_PEELAMEDU;
+      const res = await planRoutes(currPos, {
+        lat: targetDelivery.lat,
+        lng: targetDelivery.lng,
+      });
+      if (res && Array.isArray(res.routes) && res.routes.length > 0) {
+        setPlannedRoutes(res.routes);
+        setIsOptimizing(true);
+        const qRes = await runQars({
+          from: currPos,
+          to: { lat: targetDelivery.lat, lng: targetDelivery.lng },
+          routes: res.routes,
+          hazards: hazardsRef.current,
+          priority: targetDelivery.priority,
+        });
+        setQarsResult(qRes);
+        if (qRes?.best) {
+          const bIdx = res.routes.findIndex((r) => r.id === qRes.best.id);
+          setSelectedRouteIndex(bIdx !== -1 ? bIdx : 0);
+          if (Array.isArray(qRes.best.coords) && qRes.best.coords.length > 1) {
+            setMapFitBoundsCoords(qRes.best.coords);
+          }
+        }
+        if (tripStatus === "in_transit") {
+          moverRef.current?.start();
+        }
+        toast.success(
+          locale === "ta"
+            ? "மாற்று வழித்தடம் அமைக்கப்பட்டது!"
+            : "Alternative bypass route activated from current position!"
+        );
+      } else {
+        toast.error(
+          locale === "ta"
+            ? "மாற்றுப்பாதை கிடைக்கவில்லை"
+            : "Could not compute alternative route"
+        );
+      }
+    } catch (err) {
+      console.error("Reroute error:", err);
+      toast.error(locale === "ta" ? "மாற்றுப்பாதை அமைப்பதில் பிழை" : "Failed to reroute");
+    } finally {
+      isPlanningRef.current = false;
+      isOptimizingRef.current = false;
+      setIsPlanningRoutes(false);
+      setIsOptimizing(false);
+    }
+  }, [tripStatus, locale, toast]);
+
   // Report Field Hazard
   const handleReportHazard = async (type) => {
     try {
+      const currPos = currentPositionRef.current || DEPOT_PEELAMEDU;
       const res = await addHazard({
         type,
-        lat: currentPosition.lat,
-        lng: currentPosition.lng,
+        lat: currPos.lat,
+        lng: currPos.lng,
         radiusM: 300,
         severity: "high",
         note: `Driver ${profile?.name || "Karthik"} reported ${type} at field location`,
@@ -497,7 +815,7 @@ export default function DriverDashboard({ mode = "driver" }) {
       await sendMessage(
         profile?.uid || "driver-me",
         "admin",
-        `FIELD REPORT: ${type.toUpperCase()} reported near [${currentPosition.lat.toFixed(4)}, ${currentPosition.lng.toFixed(4)}]`
+        `FIELD REPORT: ${type.toUpperCase()} reported near [${currPos.lat.toFixed(4)}, ${currPos.lng.toFixed(4)}]`
       );
 
       toast.success(
@@ -511,38 +829,28 @@ export default function DriverDashboard({ mode = "driver" }) {
     }
   };
 
-  // Simulation Drive along Selected/Best Route (Moves ONLY along real road coordinates)
+  // Live Location Broadcaster (every 3s)
   useEffect(() => {
-    if (!isSimulating) return;
-
-    const activeRoute = qarsResult?.best || plannedRoutes[selectedRouteIndex];
-    if (!activeRoute || !activeRoute.coords || activeRoute.coords.length < 2) {
-      setIsSimulating(false);
-      return;
-    }
-
-    const path = buildPath(activeRoute.coords);
-    if (!path || path.totalDistance <= 0) {
-      setIsSimulating(false);
-      return;
-    }
-
-    const speedMps = 35; // ~35 meters per second tick along actual road
-    const interval = setInterval(() => {
-      simulationStepRef.current += speedMps;
-      if (simulationStepRef.current >= path.totalDistance) {
-        simulationStepRef.current = 0;
+    const timer = setInterval(() => {
+      if (tripStatus === "in_transit" || tripStatus === "open") {
+        const currPos = currentPositionRef.current || DEPOT_PEELAMEDU;
+        const targetDel = selectedDeliveryRef.current;
+        const m = moverRef.current;
+        const speed = demoSpeedFactorRef.current || 10;
+        updateLiveLocation(profile, {
+          lat: currPos.lat,
+          lng: currPos.lng,
+          heading: currentHeadingRef.current || 0,
+          status: tripStatus,
+          destination: targetDel ? `${targetDel.code} - ${targetDel.customerName}` : null,
+          progress: m?.progress || 0,
+          etaMinutes: Math.max(1, Math.round((m?.remainingM || 0) / ((40 * 1000 / 60) * speed))),
+          remainingM: m?.remainingM || 0,
+        });
       }
-
-      const pt = pointAtDistance(path, simulationStepRef.current);
-      if (pt) {
-        setCurrentHeading(pt.heading);
-        setCurrentPosition({ lat: pt.lat, lng: pt.lng });
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [isSimulating, qarsResult, plannedRoutes, selectedRouteIndex]);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [tripStatus, profile]);
 
   // Send message to Admin
   const handleSendMessage = async (textToSend) => {
@@ -559,7 +867,6 @@ export default function DriverDashboard({ mode = "driver" }) {
     }
   };
 
-
   // Deliveries sorting: In emergency mode, medical & food come first
   const sortedDeliveries = useMemo(() => {
     if (!isEmergency) return deliveries;
@@ -570,7 +877,7 @@ export default function DriverDashboard({ mode = "driver" }) {
     });
   }, [deliveries, isEmergency]);
 
-  // Map Routes Configuration (Real road coordinates + snapped waypoint connectors)
+  // Map Routes Configuration (Real road coordinates + completed/remaining split)
   const mapRoutes = useMemo(() => {
     if (!plannedRoutes.length) return [];
 
@@ -583,6 +890,8 @@ export default function DriverDashboard({ mode = "driver" }) {
         return {
           id: r.id,
           coords: r.coords,
+          completedCoords: isBest ? mover.completedCoords : undefined,
+          remainingCoords: isBest ? mover.remainingCoords : undefined,
           color: isBest ? (isEmergency ? "#EF4444" : "#00E5FF") : ROUTE_COLORS[idx % ROUTE_COLORS.length],
           isHighlighted: isBest,
           isDashed: true,
@@ -598,23 +907,27 @@ export default function DriverDashboard({ mode = "driver" }) {
     }
 
     // Default candidate routes: Route A (cyan), Route B (violet), Route C (amber), all dashed
-    return plannedRoutes.map((r, idx) => ({
-      id: r.id,
-      coords: r.coords,
-      color: r.color || ROUTE_COLORS[idx % ROUTE_COLORS.length],
-      isHighlighted: idx === selectedRouteIndex,
-      isDashed: true,
-      snappedStart: r.snappedStart,
-      snappedEnd: r.snappedEnd,
-      fromCoords: r.fromCoords || [currentPosition.lat, currentPosition.lng],
-      toCoords: r.toCoords || (selectedDelivery ? [selectedDelivery.lat, selectedDelivery.lng] : null),
-      label: `${r.label || `Route ${String.fromCharCode(65 + idx)}`} • ${Math.round(r.distanceM / 1000)} km • ${Math.round(r.durationS / 60)} min`,
-    }));
-  }, [plannedRoutes, qarsResult, selectedRouteIndex, isEmergency, selectedDelivery, currentPosition]);
+    return plannedRoutes.map((r, idx) => {
+      const isSelected = idx === selectedRouteIndex;
+      return {
+        id: r.id,
+        coords: r.coords,
+        completedCoords: isSelected ? mover.completedCoords : undefined,
+        remainingCoords: isSelected ? mover.remainingCoords : undefined,
+        color: r.color || ROUTE_COLORS[idx % ROUTE_COLORS.length],
+        isHighlighted: isSelected,
+        isDashed: true,
+        snappedStart: r.snappedStart,
+        snappedEnd: r.snappedEnd,
+        fromCoords: r.fromCoords || [currentPosition.lat, currentPosition.lng],
+        toCoords: r.toCoords || (selectedDelivery ? [selectedDelivery.lat, selectedDelivery.lng] : null),
+        label: `${r.label || `Route ${String.fromCharCode(65 + idx)}`} • ${Math.round(r.distanceM / 1000)} km • ${Math.round(r.durationS / 60)} min`,
+      };
+    });
+  }, [plannedRoutes, qarsResult, selectedRouteIndex, isEmergency, selectedDelivery, currentPosition, mover.completedCoords, mover.remainingCoords]);
 
   // Vehicles list for FleetMap (Privacy by role: ONLY the logged-in user's own vehicle)
   const mapVehicles = useMemo(() => {
-    const activeRoute = qarsResult?.best || plannedRoutes[selectedRouteIndex];
     return [
       {
         uid: profile?.uid || profile?.driverId || "my-truck",
@@ -625,13 +938,16 @@ export default function DriverDashboard({ mode = "driver" }) {
         heading: currentHeading,
         status: tripStatus === "issue" ? "issue" : tripStatus === "in_transit" ? "on_time" : "idle",
         role: isEmergency ? "emergency" : "driver",
+        isEmergency,
         priority: selectedDelivery?.priority || (isEmergency ? "medical" : "normal"),
         cargoType: selectedDelivery?.cargo || (isEmergency ? "Liquid Medical Oxygen" : "Freight"),
         routeCoords: activeRoute?.coords,
-        currentDistM: isSimulating ? simulationStepRef.current : undefined,
+        currentDistM: mover.distanceCoveredM,
+        progress: mover.progress,
+        etaMinutes: Math.max(1, Math.round(mover.remainingM / ((40 * 1000 / 60) * demoSpeedFactor))),
       },
     ];
-  }, [profile, currentPosition, currentHeading, tripStatus, isEmergency, selectedDelivery, qarsResult, plannedRoutes, selectedRouteIndex, isSimulating]);
+  }, [profile, currentPosition, currentHeading, tripStatus, isEmergency, selectedDelivery, activeRoute, mover.distanceCoveredM, mover.progress, mover.remainingM, demoSpeedFactor]);
 
 
   // Sparkline coordinates generator
@@ -758,26 +1074,30 @@ export default function DriverDashboard({ mode = "driver" }) {
             height="100%"
             showDepot={true}
             depotCoords={[DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng]}
-            fitBoundsCoords={bestRouteBoundsCoords}
+            fitBoundsCoords={mapFitBoundsCoords}
+            followCoords={[currentPosition.lat, currentPosition.lng]}
+            followEnabled={followTruck && (tripStatus === "in_transit" || mover.running)}
           />
 
-          {/* Simulation & Telemetry Floating Bar on Map */}
+          {/* Telemetry & Follow Truck Floating Bar on Map */}
           <div className="absolute top-4 left-4 z-10 flex flex-wrap items-center gap-2">
             <button
-              onClick={() => setIsSimulating(!isSimulating)}
+              onClick={() => setFollowTruck(!followTruck)}
               className={`px-3 py-1.5 rounded-xl text-xs font-semibold backdrop-blur-md border shadow-lg flex items-center gap-1.5 transition-all ${
-                isSimulating
-                  ? "bg-amber-500/20 border-amber-500/50 text-amber-300 animate-pulse"
-                  : "bg-slate-900/80 border-glass-border text-slate-200 hover:bg-white/10"
+                followTruck
+                  ? isEmergency
+                    ? "bg-red-500/20 border-red-500/60 text-red-300"
+                    : "bg-cyan-500/20 border-cyan-500/60 text-cyan-300"
+                  : "bg-slate-900/80 border-glass-border text-slate-400 hover:text-white"
               }`}
             >
-              {isSimulating ? <Square className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5" />}
-              <span>{isSimulating ? "Stop Simulation" : "Simulate Drive"}</span>
+              <Navigation className="w-3.5 h-3.5" />
+              <span>{locale === "ta" ? "வாகனம் தொடர்" : "Follow truck"} {followTruck ? "ON" : "OFF"}</span>
             </button>
 
             <div className="px-3 py-1.5 rounded-xl text-xs bg-slate-900/80 backdrop-blur-md border border-glass-border text-slate-300 font-mono hidden sm:flex items-center gap-2">
               <Compass className="w-3.5 h-3.5 text-cyan-400" />
-              <span>{currentHeading.toFixed(0)}°</span>
+              <span>{Math.round(currentHeading)}°</span>
               <span className="text-slate-600">|</span>
               <span>{currentPosition.lat.toFixed(4)}, {currentPosition.lng.toFixed(4)}</span>
             </div>
@@ -835,70 +1155,141 @@ export default function DriverDashboard({ mode = "driver" }) {
               </div>
             </div>
 
-            {/* Start Point Toggle: Depot | My GPS */}
-            <div className="flex items-center justify-between p-2 rounded-xl bg-black/40 border border-white/5 text-xs">
-              <span className="text-slate-300 font-medium text-[11px] flex items-center gap-1.5">
-                <Compass className="w-3.5 h-3.5 text-cyan-400" />
+            {/* Start Point Toggle: Segmented Control */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-black/40 border border-white/10 text-xs">
+              <span className="text-slate-300 font-semibold text-xs flex items-center gap-1.5">
+                <Compass className="w-4 h-4 text-cyan-400" />
                 <span>{locale === "ta" ? "தொடக்க இடம்:" : "Start from:"}</span>
               </span>
-              <div className="inline-flex p-0.5 rounded-lg bg-white/5 border border-white/10">
+              <div className="inline-flex items-center gap-1.5 p-1 rounded-xl bg-slate-900/90 border border-white/10">
                 <button
                   type="button"
                   onClick={() => handleToggleStartLocation("depot")}
-                  className={`px-2.5 py-1 rounded-md font-semibold text-[11px] transition-all ${
+                  className={`px-3 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all ${
                     startLocationType === "depot"
                       ? isEmergency
-                        ? "bg-red-500 text-white shadow-sm"
-                        : "bg-cyan-500 text-slate-950 shadow-sm"
-                      : "text-slate-400 hover:text-white"
+                        ? "bg-red-500 text-white shadow-md shadow-red-500/30 border border-red-400"
+                        : "bg-cyan-500 text-white shadow-md shadow-cyan-500/30 border border-cyan-400"
+                      : "bg-transparent text-slate-300 hover:text-white border border-white/20 hover:border-white/40"
                   }`}
                 >
-                  {locale === "ta" ? "டிப்போ" : "Depot"}
+                  <span className="text-sm leading-none">🏭</span>
+                  <span>{locale === "ta" ? "டிப்போ" : "Depot"}</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => handleToggleStartLocation("gps")}
-                  className={`px-2.5 py-1 rounded-md font-semibold text-[11px] transition-all ${
+                  className={`px-3 py-1.5 rounded-lg font-bold text-xs flex items-center gap-1.5 transition-all ${
                     startLocationType === "gps"
                       ? isEmergency
-                        ? "bg-red-500 text-white shadow-sm"
-                        : "bg-cyan-500 text-slate-950 shadow-sm"
-                      : "text-slate-400 hover:text-white"
+                        ? "bg-red-500 text-white shadow-md shadow-red-500/30 border border-red-400"
+                        : "bg-cyan-500 text-white shadow-md shadow-cyan-500/30 border border-cyan-400"
+                      : "bg-transparent text-slate-300 hover:text-white border border-white/20 hover:border-white/40"
                   }`}
                 >
-                  {locale === "ta" ? "என் ஜிபிஎஸ்" : "My GPS"}
+                  <span className="text-sm leading-none">📍</span>
+                  <span>{locale === "ta" ? "என் ஜிபிஎஸ்" : "My GPS"}</span>
                 </button>
               </div>
             </div>
 
             {/* Quick Trip Controls */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={handleStartTrip}
-                disabled={tripStatus === "in_transit"}
-                className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
-                  tripStatus === "in_transit"
-                    ? "bg-white/5 text-slate-500 cursor-not-allowed border border-white/5"
-                    : "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40"
-                }`}
-              >
-                <Play className="w-3.5 h-3.5" />
-                <span>{locale === "ta" ? "பயணத்தை தொடங்கு" : "Start Trip"}</span>
-              </button>
+            {tripStatus === "in_transit" ? (
+              <div className="flex flex-col gap-2 p-2.5 rounded-xl bg-black/40 border border-white/10">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-cyan-400 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping inline-block" />
+                    <span>In Transit</span>
+                  </span>
+                  <div className="flex items-center gap-1 bg-white/5 p-0.5 rounded-lg border border-white/10">
+                    {[1, 5, 10].map((factor) => (
+                      <button
+                        key={factor}
+                        onClick={() => {
+                          setDemoSpeedFactor(factor);
+                          mover.setSpeedFactor(factor);
+                        }}
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
+                          demoSpeedFactor === factor
+                            ? isEmergency
+                              ? "bg-red-500 text-white"
+                              : "bg-cyan-500 text-slate-950"
+                            : "text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        {factor}x
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-              <button
-                onClick={handleMarkDelivered}
-                disabled={tripStatus === "delivered" || !selectedDelivery}
-                className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
-                  tripStatus === "delivered"
-                    ? "bg-white/5 text-slate-500 cursor-not-allowed border border-white/5"
-                    : "bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40"
-                }`}
-              >
-                <CheckCircle className="w-3.5 h-3.5" />
-                <span>{locale === "ta" ? "டெலிவரி முடிந்தது" : "Mark Delivered"}</span>
-              </button>
-            </div>
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[11px] font-mono text-slate-300">
+                    <span>{Math.round(mover.progress * 100)}%</span>
+                    <span className="text-cyan-300">{(mover.remainingM / 1000).toFixed(1)} km left</span>
+                    <span className="text-emerald-400">ETA ~{Math.max(1, Math.round(mover.remainingM / ((40 * 1000 / 60) * demoSpeedFactor)))}m</span>
+                  </div>
+                  <div className="w-full h-1.5 rounded-full bg-white/10 overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-cyan-400 to-emerald-400 transition-all duration-300"
+                      style={{ width: `${Math.min(100, Math.max(0, Math.round(mover.progress * 100)))}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1.5 pt-1">
+                  <button
+                    onClick={handleTogglePause}
+                    className="py-1.5 px-2 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                  >
+                    {mover.running ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3 fill-current" />}
+                    <span>{mover.running ? "Pause" : "Resume"}</span>
+                  </button>
+                  <button
+                    onClick={handleResetTrip}
+                    className="py-1.5 px-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Reset</span>
+                  </button>
+                  <button
+                    onClick={handleMarkDelivered}
+                    className="py-1.5 px-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                  >
+                    <CheckCircle className="w-3 h-3" />
+                    <span>Delivered</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={handleStartTrip}
+                  disabled={tripStatus === "delivered" || !selectedDelivery}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                    tripStatus === "delivered" || !selectedDelivery
+                      ? "bg-white/5 text-slate-500 cursor-not-allowed border border-white/5"
+                      : "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40"
+                  }`}
+                >
+                  <Play className="w-3.5 h-3.5 fill-current" />
+                  <span>▶ {locale === "ta" ? "பயணத்தை தொடங்கு" : "Start trip"}</span>
+                </button>
+
+                <button
+                  onClick={handleMarkDelivered}
+                  disabled={tripStatus === "delivered" || !selectedDelivery}
+                  className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                    tripStatus === "delivered" || !selectedDelivery
+                      ? "bg-white/5 text-slate-500 cursor-not-allowed border border-white/5"
+                      : "bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40"
+                  }`}
+                >
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  <span>{locale === "ta" ? "டெலிவரி முடிந்தது" : "Mark Delivered"}</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* SECTION 2: My Deliveries */}
@@ -1193,6 +1584,103 @@ export default function DriverDashboard({ mode = "driver" }) {
                 )}
               </div>
             )}
+
+            {/* Trip Action & Road Movement Card (Directly accessible after QARS or route selection) */}
+            {(qarsResult || plannedRoutes.length > 0) && (
+              <div className="p-3.5 rounded-2xl bg-white/[0.04] border border-glass-border flex flex-col gap-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-200">
+                    <Truck className={`w-4 h-4 ${isEmergency ? "text-red-400" : "text-cyan-400"}`} />
+                    <span>{locale === "ta" ? "பயண இயக்கம்" : "Trip Action & Movement"}</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {[1, 5, 10].map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setDemoSpeedFactor(s)}
+                        className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-all ${
+                          demoSpeedFactor === s
+                            ? isEmergency
+                              ? "bg-red-500 text-white shadow-sm"
+                              : "bg-cyan-500 text-slate-950 shadow-sm"
+                            : "bg-white/5 text-slate-400 hover:text-white"
+                        }`}
+                      >
+                        {s}x
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {tripStatus === "in_transit" ? (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between text-xs font-mono">
+                      <span className="text-cyan-300 font-bold">
+                        {(mover.remainingM / 1000).toFixed(1)} km remaining
+                      </span>
+                      <span className="text-emerald-400 font-bold">
+                        ETA ~{Math.max(1, Math.round(mover.remainingM / ((40 * 1000 / 60) * demoSpeedFactor)))}m
+                      </span>
+                    </div>
+
+                    <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden relative">
+                      <div
+                        className={`h-full transition-all duration-300 ${
+                          isEmergency
+                            ? "bg-gradient-to-r from-red-500 to-amber-400"
+                            : "bg-gradient-to-r from-cyan-400 to-emerald-400"
+                        }`}
+                        style={{ width: `${Math.min(100, Math.max(0, Math.round(mover.progress * 100)))}%` }}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleTogglePause}
+                        className="py-2 px-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                      >
+                        {mover.running ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 fill-current" />}
+                        <span>{mover.running ? "Pause" : "Resume"}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResetTrip}
+                        className="py-2 px-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        <span>Reset</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleMarkDelivered}
+                        className="py-2 px-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center justify-center gap-1 transition-all"
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        <span>Delivered</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleStartTrip}
+                    disabled={tripStatus === "delivered" || !selectedDelivery}
+                    className={`w-full py-3 px-4 rounded-xl font-extrabold text-sm flex items-center justify-center gap-2 transition-all shadow-lg ${
+                      tripStatus === "delivered" || !selectedDelivery
+                        ? "bg-white/5 text-slate-500 cursor-not-allowed border border-white/5"
+                        : isEmergency
+                        ? "bg-gradient-to-r from-red-500 to-amber-500 hover:from-red-600 hover:to-amber-600 text-white shadow-red-500/30"
+                        : "bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white shadow-emerald-500/30"
+                    }`}
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span>▶ {locale === "ta" ? "பயணத்தை தொடங்கு" : "Start trip"}</span>
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* SECTION 5: Safety & Options (Advisories + Audio Read-Aloud) */}
@@ -1300,10 +1788,7 @@ export default function DriverDashboard({ mode = "driver" }) {
 
           <div className="grid grid-cols-2 gap-2 mt-3.5">
             <button
-              onClick={() => {
-                setActiveHazardAlert(null);
-                handleRunQars(); // Re-runs QARS with the new hazard included
-              }}
+              onClick={handleRerouteFromCurrentPosition}
               className="py-2 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1 transition-all shadow-md"
             >
               <Sparkles className="w-3.5 h-3.5" />

@@ -1,60 +1,66 @@
 /**
- * RippleRoute — Core API Service Gateway (STEP 1)
+ * RippleRoute — Core API Service Gateway
  *
  * This is the ONLY data layer for RippleRoute.
- * All application data access and mutations MUST strictly route through this module.
- * Later phases will replace the internal implementation with Firebase/Live backends
- * without changing any exported function names, parameters, or return shapes.
+ * All application data access and mutations strictly route through this module.
+ * Automatically delegates to Firestore when isFirebaseConfigured is true,
+ * and falls back seamlessly to mockStore when false.
  */
 
+import { isFirebaseConfigured } from "@/lib/firebase";
+import * as firestoreApi from "./firestoreApi";
 import { mockStore, DEPOT_PEELAMEDU } from "./mockStore";
 import { haversineMeters, minDistanceToPolylineMeters } from "@/lib/geo";
+import { getRoadRoutes, getCandidateRoadRoutes } from "@/lib/roadRouting";
 
 export { DEPOT_PEELAMEDU };
 export const COIMBATORE_CENTER = { lat: 11.0168, lng: 76.9558, name: "Coimbatore City Center" };
 
 /**
- * 1. getDeliveries()
- * @returns {Promise<Array<{id: string, code: string, customerName: string, customerPhone: string, address: string, lat: number, lng: number, cargo: string, priority: "medical"|"food"|"normal", status: "open"|"in_transit"|"delivered"|"delayed", assignedTo: string|null, etaText: string}>>}
+ * 1. Deliveries API
  */
 export async function getDeliveries() {
+  if (isFirebaseConfigured) {
+    return firestoreApi.getDeliveries();
+  }
   await new Promise((r) => setTimeout(r, 60));
   return mockStore.getDeliveries();
 }
 
-/**
- * 2. updateDelivery(id, patch)
- * @param {string} id
- * @param {object} patch
- * @returns {Promise<{ok: boolean}>}
- */
+export function subscribeDeliveries(cb) {
+  if (isFirebaseConfigured) {
+    return firestoreApi.subscribeDeliveries(cb);
+  }
+  return mockStore.subscribeDeliveries(cb);
+}
+
 export async function updateDelivery(id, patch) {
+  if (isFirebaseConfigured) {
+    return firestoreApi.updateDelivery(id, patch);
+  }
   await new Promise((r) => setTimeout(r, 60));
   const success = mockStore.updateDelivery(id, patch);
   return { ok: Boolean(success) };
 }
 
 /**
- * 3. getHazards()
- * @returns {Promise<Array<{id: string, type: "accident"|"roadblock"|"breakdown"|"rain"|"landslide", lat: number, lng: number, radiusM: number, severity: string, note: string, active: boolean, createdAt: string}>>}
+ * 2. Hazards API
  */
 export async function getHazards() {
+  if (isFirebaseConfigured) {
+    return firestoreApi.getHazards();
+  }
   await new Promise((r) => setTimeout(r, 60));
   return mockStore.getHazards();
 }
 
-/**
- * 4. subscribeHazards(cb)
- * Polling mock of in-memory store
- * @param {(hazards: Array<any>) => void} cb
- * @returns {() => void} unsubscribe function
- */
 export function subscribeHazards(cb) {
+  if (isFirebaseConfigured) {
+    return firestoreApi.subscribeHazards(cb);
+  }
   if (typeof cb !== "function") return () => {};
 
-  // Immediate emit
   cb(mockStore.getHazards());
-
   const intervalId = setInterval(() => {
     try {
       cb(mockStore.getHazards());
@@ -66,30 +72,26 @@ export function subscribeHazards(cb) {
   return () => clearInterval(intervalId);
 }
 
-/**
- * 5. addHazard(data) & resolveHazard(id)
- */
 export async function addHazard(data) {
+  if (isFirebaseConfigured) {
+    return firestoreApi.addHazard(data);
+  }
   await new Promise((r) => setTimeout(r, 80));
   const id = mockStore.addHazard(data);
   return { ok: true, id };
 }
 
 export async function resolveHazard(id) {
+  if (isFirebaseConfigured) {
+    return firestoreApi.resolveHazard(id);
+  }
   await new Promise((r) => setTimeout(r, 80));
   const success = mockStore.resolveHazard(id);
   return { ok: Boolean(success) };
 }
 
-import { getRoadRoutes, getCandidateRoadRoutes } from "@/lib/roadRouting";
-
 /**
- * 6. planRoutes(from, to)
- * Every route must come from getRoadRoutes / getCandidateRoadRoutes (src/lib/roadRouting.js) using OSRM with overview=full&geometries=geojson.
- * Remove ALL synthetic/curved/straight fallback lines. If road data fails, return empty array.
- * @param {{lat: number, lng: number}} from
- * @param {{lat: number, lng: number}} to
- * @returns {Promise<{routes: Array<{id: string, coords: [number, number][], distanceM: number, durationS: number, source: string, snappedStart?: [number, number], snappedEnd?: [number, number], label?: string, routeLetter?: string, color?: string, isDashed?: boolean}>}>}
+ * 3. Routing & QARS (Phase 3 handles routing)
  */
 export async function planRoutes(from, to) {
   if (!from || !to || typeof from.lat !== "number" || typeof from.lng !== "number" || typeof to.lat !== "number" || typeof to.lng !== "number") {
@@ -100,14 +102,7 @@ export async function planRoutes(from, to) {
   return { routes: routes || [] };
 }
 
-
-/**
- * 7. runQars({from, to, routes, hazards, priority})
- * MOCK: wait 1.2 s, pick the route with the fewest hazards near it, fake a decreasing convergence array of 40 numbers.
- * @returns {Promise<{best: object, candidates: Array<object>, baselineDelayMin: number, bestDelayMin: number, timeSavedMin: number, convergence: number[]}>}
- */
 export async function runQars({ from, to, routes, hazards = [], priority = "normal" }) {
-  // Wait 1.2 s
   await new Promise((r) => setTimeout(r, 1200));
 
   if (!Array.isArray(routes) || routes.length === 0) {
@@ -123,8 +118,7 @@ export async function runQars({ from, to, routes, hazards = [], priority = "norm
 
   const activeHazards = (hazards || []).filter((h) => h.active !== false);
 
-  // Evaluate candidate routes
-  const candidates = routes.map((route, idx) => {
+  const candidates = routes.map((route) => {
     const hits = [];
     for (const h of activeHazards) {
       const hLat = h.lat ?? h.location?.lat;
@@ -144,7 +138,6 @@ export async function runQars({ from, to, routes, hazards = [], priority = "norm
       }
     }
 
-    // Cost function: base time + penalty per hazard hit (higher penalty for medical/food)
     const hazardPenaltyPerHit = priority === "medical" ? 1800 : priority === "food" ? 1200 : 900;
     const cost = Math.round(route.durationS + hits.length * hazardPenaltyPerHit);
 
@@ -155,7 +148,6 @@ export async function runQars({ from, to, routes, hazards = [], priority = "norm
     };
   });
 
-  // Pick the route with fewest hazard hits, then lowest cost / shortest duration
   let best = candidates[0];
   for (let i = 1; i < candidates.length; i++) {
     const cand = candidates[i];
@@ -166,7 +158,6 @@ export async function runQars({ from, to, routes, hazards = [], priority = "norm
     }
   }
 
-  // Calculate delays and savings
   const maxHits = Math.max(...candidates.map((c) => c.hits.length), 0);
   const bestHits = best.hits.length;
 
@@ -174,7 +165,6 @@ export async function runQars({ from, to, routes, hazards = [], priority = "norm
   const bestDelayMin = bestHits * 3;
   const timeSavedMin = Math.max(5, baselineDelayMin - bestDelayMin);
 
-  // Fake a decreasing convergence array of 40 numbers
   const convergence = [];
   let currentVal = 48.0 + Math.random() * 4.0;
   for (let i = 0; i < 40; i++) {
@@ -195,9 +185,7 @@ export async function runQars({ from, to, routes, hazards = [], priority = "norm
 }
 
 /**
- * 8. getAdvisory({hazardsOnRoute, rain, lang})
- * Mock template lines in correct English and Tamil
- * @returns {Promise<{en: [string, string], ta: [string, string]}>}
+ * 4. Advisory Service
  */
 export async function getAdvisory({ hazardsOnRoute = [], rain = false, lang = "en" }) {
   await new Promise((r) => setTimeout(r, 40));
@@ -253,63 +241,53 @@ export async function getAdvisory({ hazardsOnRoute = [], rain = false, lang = "e
 }
 
 /**
- * 9. updateLiveLocation(profile, {lat,lng,heading,status,destination})
- * subscribeLiveLocations(cb)
+ * 5. Live Locations & Telemetry (ADMIN ONLY)
  */
 export async function updateLiveLocation(profile, loc) {
   if (!profile || !loc) return { ok: false };
+  if (isFirebaseConfigured) {
+    return firestoreApi.updateLiveLocation(profile, loc);
+  }
   mockStore.updateLiveLocation(profile, loc);
   return { ok: true };
 }
 
 export function subscribeLiveLocations(cb) {
-  if (typeof cb !== "function") return () => {};
-
-  cb(mockStore.getLiveLocations());
-
-  const intervalId = setInterval(() => {
-    try {
-      cb(mockStore.getLiveLocations());
-    } catch (err) {
-      console.error("[subscribeLiveLocations] callback error:", err);
-    }
-  }, 1000);
-
-  return () => clearInterval(intervalId);
+  if (isFirebaseConfigured) {
+    return firestoreApi.subscribeLiveLocations(cb);
+  }
+  return mockStore.subscribeLiveLocations(cb);
 }
 
 /**
- * 10. sendMessage(fromUid, toUid, text)
- * subscribeMessages(uid, cb)
+ * 6. Messages & Dispatch Comms
  */
-export async function sendMessage(fromUid, toUid, text) {
+export async function sendMessage(fromUid, toUid, text, fromName = "") {
+  if (isFirebaseConfigured) {
+    return firestoreApi.sendMessage(fromUid, toUid, text, fromName);
+  }
   await new Promise((r) => setTimeout(r, 40));
   mockStore.addMessage(fromUid, toUid, text);
   return { ok: true };
 }
 
 export function subscribeMessages(uid, cb) {
-  if (typeof cb !== "function") return () => {};
-
-  cb(mockStore.getMessages(uid));
-
-  const intervalId = setInterval(() => {
-    try {
-      cb(mockStore.getMessages(uid));
-    } catch (err) {
-      console.error("[subscribeMessages] callback error:", err);
-    }
-  }, 1000);
-
-  return () => clearInterval(intervalId);
+  if (isFirebaseConfigured) {
+    return firestoreApi.subscribeMessages(uid, cb);
+  }
+  return mockStore.subscribeMessages(uid, cb);
 }
 
 /**
- * 11. sendCustomerSms({to, body, deliveryCode})
- * Mock: wait 800 ms
+ * 7. Customer SMS
  */
 export async function sendCustomerSms({ to, body, deliveryCode }) {
   await new Promise((r) => setTimeout(r, 800));
   const sid = `SM_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  if (isFirebaseConfigured) {
+    try {
+      await firestoreApi.logSms({ to, body, deliveryCode, ok: true, sid });
+    } catch (_) {}
+  }
   return { ok: true, sid };
 }
