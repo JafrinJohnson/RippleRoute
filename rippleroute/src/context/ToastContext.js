@@ -1,10 +1,92 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback } from "react";
+import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
 import clsx from "clsx";
 import { CheckCircle2, AlertTriangle, AlertOctagon, Info, X, Zap } from "lucide-react";
 
-const ToastContext = createContext(null);
+/**
+ * Creates a callable function object that supports:
+ * 1. toast({ title, description, variant, actions, duration })
+ * 2. toast.success(message, options)
+ * 3. toast.error(message, options)
+ * 4. toast.warning(message, options)
+ * 5. toast.info(message, options)
+ * 6. toast.danger(message, options)
+ * 7. const { toast } = useToast() (via .toast self-reference)
+ */
+function createToastFunction(addToast, removeToast = () => {}) {
+  const toastFn = function (arg, options = {}) {
+    if (!arg) return;
+    if (typeof arg === "string") {
+      const type = options.variant || options.type || "info";
+      const normalizedType =
+        type === "error" ? "danger" : type === "warning" ? "warn" : type;
+      return addToast({
+        title: arg,
+        description: options.description,
+        type: normalizedType,
+        duration: options.duration ?? 4500,
+        action: options.action || options.actions,
+      });
+    }
+
+    const type = arg.variant || arg.type || "info";
+    const normalizedType =
+      type === "error" ? "danger" : type === "warning" ? "warn" : type;
+    return addToast({
+      title: arg.title,
+      description: arg.description,
+      type: normalizedType,
+      duration: arg.duration ?? 4500,
+      action: arg.action || arg.actions,
+    });
+  };
+
+  const createHelper = (type) => (message, options = {}) => {
+    const title = typeof message === "string" ? message : message?.title || "";
+    const description =
+      typeof message === "string"
+        ? options.description
+        : message?.description;
+    const duration =
+      options.duration ?? (typeof message === "object" ? message?.duration : undefined) ?? 4500;
+    const action =
+      options.action ||
+      options.actions ||
+      (typeof message === "object" ? message?.action || message?.actions : undefined);
+
+    const normalizedType =
+      type === "error" ? "danger" : type === "warning" ? "warn" : type;
+
+    return addToast({
+      title,
+      description,
+      type: normalizedType,
+      duration,
+      action,
+    });
+  };
+
+  toastFn.success = createHelper("success");
+  toastFn.error = createHelper("danger");
+  toastFn.danger = createHelper("danger");
+  toastFn.warning = createHelper("warn");
+  toastFn.warn = createHelper("warn");
+  toastFn.info = createHelper("info");
+
+  // Self-references for destructuring support
+  toastFn.toast = toastFn;
+  toastFn.addToast = toastFn;
+  toastFn.showToast = toastFn;
+  toastFn.removeToast = removeToast;
+
+  return toastFn;
+}
+
+// Default no-op toast function for safe usage outside provider
+const noop = () => {};
+const defaultToast = createToastFunction(noop, noop);
+const ToastContext = createContext(defaultToast);
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
@@ -37,8 +119,13 @@ export function ToastProvider({ children }) {
     [removeToast]
   );
 
+  const toastHandler = useMemo(
+    () => createToastFunction(addToast, removeToast),
+    [addToast, removeToast]
+  );
+
   return (
-    <ToastContext.Provider value={{ toast: addToast, removeToast }}>
+    <ToastContext.Provider value={toastHandler}>
       {children}
 
       {/* Toasts Stack Container (Strictly BOTTOM-LEFT Corner) */}
@@ -127,8 +214,5 @@ function ToastItem({ toast, onClose }) {
 
 export function useToast() {
   const context = useContext(ToastContext);
-  if (!context) {
-    throw new Error("useToast must be used within a ToastProvider");
-  }
-  return context;
+  return context || defaultToast;
 }

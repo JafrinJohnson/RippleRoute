@@ -88,7 +88,10 @@ const ADMIN_VEHICLES = [
   {
     uid: "drv-01",
     name: "Karthik Raja",
+    phone: "+91 98421 23011",
+    driverId: "DRV-101",
     vehicleNumber: "TN 38 BX 4521",
+    location: "Avinashi Road near Lakshmi Mills (11.0210, 76.9820)",
     lat: 11.0210,
     lng: 76.9820,
     status: "on_time",
@@ -99,7 +102,10 @@ const ADMIN_VEHICLES = [
   {
     uid: "drv-02",
     name: "Priya R",
+    phone: "+91 98421 88402",
+    driverId: "EMG-201",
     vehicleNumber: "TN 38 AZ 7790",
+    location: "Saravanampatti Tech Corridor (11.0620, 76.9750)",
     lat: 11.0620,
     lng: 76.9750,
     status: "delayed",
@@ -112,7 +118,10 @@ const ADMIN_VEHICLES = [
   {
     uid: "drv-03",
     name: "Murugan K",
+    phone: "+91 94433 11209",
+    driverId: "EMG-202",
     vehicleNumber: "TN 37 CW 3321",
+    location: "Singanallur Trichy Road Bypass (11.0020, 77.0280)",
     lat: 11.0020,
     lng: 77.0280,
     status: "at_risk",
@@ -223,10 +232,72 @@ function AdminDashboardContent() {
             height="460px"
           />
         </div>
+
+        {/* Dispatcher Personnel & Vehicle Details (Admin Only) */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-white flex items-center gap-2">
+              <ShieldAlert className="w-4 h-4 text-amber-400" />
+              Dispatcher Fleet Personnel Directory (Confidential Admin View)
+            </h2>
+            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-300 border border-amber-500/20 font-mono">
+              Restricted Dispatch Access
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {ADMIN_VEHICLES.map((v) => (
+              <GlassCard
+                key={v.uid}
+                padding="p-4"
+                className={`transition-all border ${
+                  selectedUid === v.uid ? "border-cyan-400 bg-cyan-500/10" : "border-glass-border"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-bold text-sm text-white flex items-center gap-1.5">
+                    <span>{v.name}</span>
+                    {v.isEmergency && <span>🏥</span>}
+                  </div>
+                  <Badge
+                    variant={v.status === "on_time" ? "success" : v.status === "delayed" ? "danger" : "warning"}
+                    size="sm"
+                  >
+                    {v.status.replace("_", " ").toUpperCase()}
+                  </Badge>
+                </div>
+
+                <div className="space-y-1 text-xs font-mono">
+                  <div className="flex justify-between text-muted">
+                    <span>Driver ID:</span>
+                    <span className="text-white font-semibold">{v.driverId}</span>
+                  </div>
+                  <div className="flex justify-between text-muted">
+                    <span>Phone:</span>
+                    <span className="text-cyan-300">{v.phone}</span>
+                  </div>
+                  <div className="flex justify-between text-muted">
+                    <span>Vehicle Reg:</span>
+                    <span className="text-white">{v.vehicleNumber}</span>
+                  </div>
+                  <div className="text-muted pt-1 border-t border-white/5">
+                    <span className="block text-[10px]">Current Location:</span>
+                    <span className="text-slate-300 text-[11px] truncate block">{v.location}</span>
+                  </div>
+                  <div className="text-muted pt-1">
+                    <span className="block text-[10px]">Assigned Cargo:</span>
+                    <span className="text-cyan-400 text-[11px] truncate block">{v.cargoType}</span>
+                  </div>
+                </div>
+              </GlassCard>
+            ))}
+          </div>
+        </div>
       </main>
     </div>
   );
 }
+
 
 export default function AdminPage() {
   return (

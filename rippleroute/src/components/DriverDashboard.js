@@ -1,0 +1,1278 @@
+"use client";
+
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useAuth } from "@/context/AuthContext";
+import { useLanguage } from "@/context/LanguageContext";
+import { useTheme } from "@/context/ThemeContext";
+import { GlassCard, Button, Badge, Drawer, useToast } from "@/components/ui";
+import FleetMap from "@/components/map";
+import {
+  DEPOT_PEELAMEDU,
+  getDeliveries,
+  updateDelivery,
+  getHazards,
+  subscribeHazards,
+  addHazard,
+  resolveHazard,
+  planRoutes,
+  runQars,
+  getAdvisory,
+  updateLiveLocation,
+  sendMessage,
+  subscribeMessages,
+} from "@/services/api";
+import { haversineMeters, minDistanceToPolylineMeters } from "@/lib/geo";
+import { buildPath, pointAtDistance } from "@/lib/routeAnimator";
+import {
+  Truck,
+  Navigation,
+  Compass,
+  AlertTriangle,
+  Zap,
+  MapPin,
+  CheckCircle,
+  Phone,
+  Radio,
+  ArrowRight,
+  ShieldAlert,
+  Volume2,
+  VolumeX,
+  Play,
+  Square,
+  MessageSquare,
+  Send,
+  Sparkles,
+  RefreshCw,
+  Globe,
+  Sun,
+  Moon,
+  LogOut,
+  ChevronRight,
+  Clock,
+  Activity,
+  Layers,
+  HeartPulse,
+  UtensilsCrossed,
+  Package,
+  X,
+  AlertCircle,
+} from "lucide-react";
+
+export default function DriverDashboard({ mode = "driver" }) {
+  const isEmergency = mode === "emergency";
+  const { profile, logout } = useAuth();
+  const { t, locale, setLanguage } = useLanguage();
+  const { theme, toggleTheme } = useTheme();
+  const toast = useToast();
+  const router = useRouter();
+
+  // Color palettes based on mode
+  const accentColor = isEmergency ? "#EF4444" : "#00E5FF";
+  const accentBorder = isEmergency ? "border-red-500/40" : "border-cyan-500/30";
+  const accentGlow = isEmergency ? "shadow-[0_0_25px_rgba(239,68,68,0.35)]" : "shadow-[0_0_25px_rgba(0,229,255,0.25)]";
+
+  // State: Deliveries & selection
+  const [deliveries, setDeliveries] = useState([]);
+  const [selectedDelivery, setSelectedDelivery] = useState(null);
+  const [loadingDeliveries, setLoadingDeliveries] = useState(true);
+
+  // State: Hazards
+  const [hazards, setHazards] = useState([]);
+  const seenHazardIdsRef = useRef(new Set());
+  const [activeHazardAlert, setActiveHazardAlert] = useState(null);
+
+  // State: Position & Telemetry
+  const [currentPosition, setCurrentPosition] = useState({
+    lat: DEPOT_PEELAMEDU.lat,
+    lng: DEPOT_PEELAMEDU.lng,
+  });
+  const [currentHeading, setCurrentHeading] = useState(45);
+  const [tripStatus, setTripStatus] = useState("open"); // "open" | "in_transit" | "delivered" | "delayed" | "issue"
+  const [isSimulating, setIsSimulating] = useState(false);
+  const simulationStepRef = useRef(0);
+  const lastLocationUpdateRef = useRef(0);
+
+  // State: Routing & QARS
+  const [plannedRoutes, setPlannedRoutes] = useState([]);
+  const [selectedRouteIndex, setSelectedRouteIndex] = useState(0);
+  const [isPlanningRoutes, setIsPlanningRoutes] = useState(false);
+  const [isOptimizing, setIsOptimizing] = useState(false);
+  const [qarsResult, setQarsResult] = useState(null);
+
+  // State: Safety & Advisory
+  const [advisoryLines, setAdvisoryLines] = useState({ en: [], ta: [] });
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  // State: Dispatcher Chat Drawer
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [chatInput, setChatInput] = useState("");
+
+  // Live digital clock
+  const [currentTimeStr, setCurrentTimeStr] = useState("");
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      setCurrentTimeStr(now.toLocaleTimeString("en-GB", { hour12: false }));
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Audio beep for hazard alert
+  const playHazardBeep = useCallback(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(620, ctx.currentTime);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.45);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.45);
+      }
+    } catch (e) {
+      console.warn("Web Audio API beep error:", e);
+    }
+  }, []);
+
+  // Vibration alert
+  const triggerHaptic = useCallback((pattern = [300, 150, 300]) => {
+    if (typeof window === "undefined") return;
+    try {
+      if (navigator?.vibrate) {
+        navigator.vibrate(pattern);
+      }
+    } catch (e) {}
+  }, []);
+
+  // Load initial deliveries (Privacy by role: only assignedTo == me, or open deliveries they can pick)
+  const refreshDeliveries = useCallback(async () => {
+    try {
+      setLoadingDeliveries(true);
+      const data = await getDeliveries();
+      const myUid = profile?.uid || profile?.driverId;
+      const myDeliveries = data.filter((d) => {
+        return d.assignedTo === myUid || !d.assignedTo || d.status === "open";
+      });
+      setDeliveries(myDeliveries);
+      if (!selectedDelivery && myDeliveries.length > 0) {
+        // In emergency mode, prefer first medical or food delivery
+        if (isEmergency) {
+          const priorityItem = myDeliveries.find((d) => d.priority === "medical" || d.priority === "food") || myDeliveries[0];
+          setSelectedDelivery(priorityItem);
+        } else {
+          setSelectedDelivery(myDeliveries[0]);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load deliveries:", err);
+    } finally {
+      setLoadingDeliveries(false);
+    }
+  }, [isEmergency, selectedDelivery, profile]);
+
+
+  useEffect(() => {
+    refreshDeliveries();
+  }, [refreshDeliveries]);
+
+  // Subscribe to real-time hazards & monitor proximity
+  useEffect(() => {
+    const unsubscribe = subscribeHazards((updatedHazards) => {
+      setHazards((prevHazards) => {
+        // Check if a previously active hazard was cleared
+        prevHazards.forEach((prevH) => {
+          if (prevH.active) {
+            const currentH = updatedHazards.find((h) => h.id === prevH.id);
+            if (currentH && !currentH.active) {
+              toast.success(locale === "ta" ? "பாதை பாதுகாப்பானது: தடை அகற்றப்பட்டது" : "Route cleared: Active hazard resolved");
+              if (activeHazardAlert && activeHazardAlert.id === prevH.id) {
+                setActiveHazardAlert(null);
+              }
+            }
+          }
+        });
+
+        // Check for new hazards near driver or touching route
+        const activeList = updatedHazards.filter((h) => h.active !== false);
+        const currentRoute = qarsResult?.best?.coords || plannedRoutes[selectedRouteIndex]?.coords || [];
+
+        activeList.forEach((h) => {
+          if (!seenHazardIdsRef.current.has(h.id)) {
+            const hPt = { lat: h.lat, lng: h.lng };
+            const distToDriver = haversineMeters(currentPosition, hPt);
+            const distToRoute = currentRoute.length > 0 ? minDistanceToPolylineMeters(hPt, currentRoute) : Infinity;
+
+            const isNearDriver = distToDriver <= 1000;
+            const isTouchingRoute = distToRoute <= ((h.radiusM || 300) + 150);
+
+            if (isNearDriver || isTouchingRoute) {
+              seenHazardIdsRef.current.add(h.id);
+              const effectiveDist = Math.min(distToDriver, distToRoute);
+              setActiveHazardAlert({
+                ...h,
+                distMeters: Math.round(effectiveDist),
+              });
+              playHazardBeep();
+              triggerHaptic([300, 150, 300]);
+            }
+          }
+        });
+
+        return updatedHazards;
+      });
+    });
+
+    return () => unsubscribe();
+  }, [currentPosition, plannedRoutes, qarsResult, selectedRouteIndex, playHazardBeep, triggerHaptic, locale, toast, activeHazardAlert]);
+
+  // Subscribe to Dispatcher Messages
+  useEffect(() => {
+    const uid = profile?.uid || profile?.driverId || "driver-me";
+    const unsubscribe = subscribeMessages(uid, (msgs) => {
+      setMessages(msgs || []);
+    });
+    return () => unsubscribe();
+  }, [profile]);
+
+  // Native Geolocation Watcher
+  useEffect(() => {
+    if (typeof window === "undefined" || !navigator?.geolocation) return;
+    if (isSimulating) return; // Simulation takes precedence
+
+    const watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (!isSimulating) {
+          const newPos = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setCurrentPosition(newPos);
+          if (typeof pos.coords.heading === "number" && !isNaN(pos.coords.heading)) {
+            setCurrentHeading(pos.coords.heading);
+          }
+        }
+      },
+      (err) => {
+        // Quietly fallback to depot
+      },
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+    );
+
+    return () => {
+      navigator.geolocation.clearWatch(watchId);
+    };
+  }, [isSimulating]);
+
+  // Throttled Live Location Broadcaster (<= every 3s)
+  useEffect(() => {
+    const now = Date.now();
+    if (now - lastLocationUpdateRef.current >= 3000) {
+      lastLocationUpdateRef.current = now;
+      updateLiveLocation(profile, {
+        lat: currentPosition.lat,
+        lng: currentPosition.lng,
+        heading: currentHeading,
+        status: tripStatus,
+        destination: selectedDelivery ? `${selectedDelivery.code} - ${selectedDelivery.customerName}` : null,
+      });
+    }
+  }, [currentPosition, currentHeading, tripStatus, selectedDelivery, profile]);
+
+  // Route Planning Logic
+  const handlePlanRoute = useCallback(async () => {
+    if (!selectedDelivery) return;
+    try {
+      setIsPlanningRoutes(true);
+      setQarsResult(null);
+      const res = await planRoutes(currentPosition, {
+        lat: selectedDelivery.lat,
+        lng: selectedDelivery.lng,
+      });
+      if (res && Array.isArray(res.routes) && res.routes.length > 0) {
+        setPlannedRoutes(res.routes);
+        setSelectedRouteIndex(0);
+        toast.info(
+          locale === "ta"
+            ? `${res.routes.length} சாத்தியமான வழிகள் கண்டறியப்பட்டன`
+            : `${res.routes.length} candidate road routes generated`
+        );
+      } else {
+        setPlannedRoutes([]);
+        toast.error(
+          locale === "ta"
+            ? "சாலை வழிகளை ஏற்ற முடியவில்லை — இணையத்தை சரிபார்த்து மீண்டும் முயற்சிக்கவும்"
+            : "Could not load road routes — check internet and press Retry"
+        );
+      }
+    } catch (err) {
+      console.error("Plan route error:", err?.message || err);
+      setPlannedRoutes([]);
+      toast.error(
+        locale === "ta"
+          ? "சாலை வழிகளை ஏற்ற முடியவில்லை — இணையத்தை சரிபார்த்து மீண்டும் முயற்சிக்கவும்"
+          : "Could not load road routes — check internet and press Retry"
+      );
+    } finally {
+      setIsPlanningRoutes(false);
+    }
+  }, [selectedDelivery, currentPosition, locale, toast]);
+
+
+  // Automatically plan route when delivery selection changes
+  useEffect(() => {
+    if (selectedDelivery) {
+      handlePlanRoute();
+    }
+  }, [selectedDelivery, handlePlanRoute]);
+
+  // QARS Quantum-Inspired Route Optimization
+  const handleRunQars = useCallback(async () => {
+    if (!plannedRoutes.length || !selectedDelivery) return;
+    try {
+      setIsOptimizing(true);
+      const res = await runQars({
+        from: currentPosition,
+        to: { lat: selectedDelivery.lat, lng: selectedDelivery.lng },
+        routes: plannedRoutes,
+        hazards,
+        priority: selectedDelivery.priority,
+      });
+
+      setQarsResult(res);
+
+      // Find index of best route
+      if (res.best) {
+        const bestIdx = plannedRoutes.findIndex((r) => r.id === res.best.id);
+        if (bestIdx !== -1) {
+          setSelectedRouteIndex(bestIdx);
+        }
+      }
+
+      // Fetch AI advisory for best route
+      const bestHits = res.best?.hits || [];
+      const adv = await getAdvisory({
+        hazardsOnRoute: bestHits,
+        rain: hazards.some((h) => h.active && h.type === "rain"),
+        lang: locale,
+      });
+      setAdvisoryLines(adv);
+
+      toast.success(
+        locale === "ta"
+          ? `QARS உகந்த வழி தயார்! ${res.timeSavedMin} நிமிடங்கள் சேமிப்பு.`
+          : `QARS optimal swarm selected! ${res.timeSavedMin} min delay saved.`
+      );
+    } catch (err) {
+      console.error("QARS error:", err);
+      toast.error(locale === "ta" ? "QARS இயக்கத்தில் பிழை" : "QARS optimization failed");
+    } finally {
+      setIsOptimizing(false);
+    }
+  }, [plannedRoutes, selectedDelivery, currentPosition, hazards, locale, toast]);
+
+  // Speech Synthesis for Safety Advisory
+  const toggleSpeech = useCallback(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      toast.warning(locale === "ta" ? "குரல் வசதி ஆதரிக்கப்படவில்லை" : "Speech synthesis not supported in browser");
+      return;
+    }
+
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+      return;
+    }
+
+    const lines = locale === "ta" ? advisoryLines.ta : advisoryLines.en;
+    if (!lines || lines.length === 0) return;
+
+    window.speechSynthesis.cancel();
+    const fullText = lines.join(". ");
+    const utterance = new SpeechSynthesisUtterance(fullText);
+    utterance.lang = locale === "ta" ? "ta-IN" : "en-IN";
+    utterance.rate = 0.95;
+
+    utterance.onend = () => setIsSpeaking(false);
+    utterance.onerror = () => setIsSpeaking(false);
+
+    setIsSpeaking(true);
+    window.speechSynthesis.speak(utterance);
+  }, [isSpeaking, advisoryLines, locale, toast]);
+
+  // Trip Status actions
+  const handleStartTrip = async () => {
+    if (!selectedDelivery) return;
+    try {
+      setTripStatus("in_transit");
+      await updateDelivery(selectedDelivery.id, { status: "in_transit" });
+      refreshDeliveries();
+      toast.info(locale === "ta" ? "பயணம் தொடங்கியது" : `Trip started for ${selectedDelivery.code}`);
+    } catch (err) {
+      console.error("Start trip error:", err?.message || err);
+      toast.error(locale === "ta" ? "பயணத்தை தொடங்குவதில் பிழை" : "Failed to start trip");
+    }
+  };
+
+  const handleMarkDelivered = async () => {
+    if (!selectedDelivery) return;
+    try {
+      setTripStatus("delivered");
+      await updateDelivery(selectedDelivery.id, { status: "delivered" });
+      refreshDeliveries();
+      toast.success(locale === "ta" ? "வெற்றிகரமாக விநியோகிக்கப்பட்டது!" : `Package ${selectedDelivery.code} marked as delivered!`);
+    } catch (err) {
+      console.error("Mark delivered error:", err?.message || err);
+      toast.error(locale === "ta" ? "விநியோகம் பதிவு செய்வதில் பிழை" : "Failed to mark as delivered");
+    }
+  };
+
+  // Report Field Hazard
+  const handleReportHazard = async (type) => {
+    try {
+      const res = await addHazard({
+        type,
+        lat: currentPosition.lat,
+        lng: currentPosition.lng,
+        radiusM: 300,
+        severity: "high",
+        note: `Driver ${profile?.name || "Karthik"} reported ${type} at field location`,
+      });
+
+      await sendMessage(
+        profile?.uid || "driver-me",
+        "admin",
+        `FIELD REPORT: ${type.toUpperCase()} reported near [${currentPosition.lat.toFixed(4)}, ${currentPosition.lng.toFixed(4)}]`
+      );
+
+      toast.success(
+        locale === "ta"
+          ? `${type} அறிக்கை கட்டுப்பாட்டு அறைக்கு அனுப்பப்பட்டது!`
+          : `${type.toUpperCase()} reported to KovaiSwift Control Room!`
+      );
+    } catch (err) {
+      console.error("Report hazard error:", err?.message || err);
+      toast.error(locale === "ta" ? "அறிக்கை அனுப்புவதில் பிழை" : "Failed to report incident");
+    }
+  };
+
+  // Simulation Drive along Selected/Best Route (Moves ONLY along real road coordinates)
+  useEffect(() => {
+    if (!isSimulating) return;
+
+    const activeRoute = qarsResult?.best || plannedRoutes[selectedRouteIndex];
+    if (!activeRoute || !activeRoute.coords || activeRoute.coords.length < 2) {
+      setIsSimulating(false);
+      return;
+    }
+
+    const path = buildPath(activeRoute.coords);
+    if (!path || path.totalDistance <= 0) {
+      setIsSimulating(false);
+      return;
+    }
+
+    const speedMps = 35; // ~35 meters per second tick along actual road
+    const interval = setInterval(() => {
+      simulationStepRef.current += speedMps;
+      if (simulationStepRef.current >= path.totalDistance) {
+        simulationStepRef.current = 0;
+      }
+
+      const pt = pointAtDistance(path, simulationStepRef.current);
+      if (pt) {
+        setCurrentHeading(pt.heading);
+        setCurrentPosition({ lat: pt.lat, lng: pt.lng });
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isSimulating, qarsResult, plannedRoutes, selectedRouteIndex]);
+
+  // Send message to Admin
+  const handleSendMessage = async (textToSend) => {
+    const text = textToSend || chatInput;
+    if (!text.trim()) return;
+
+    try {
+      await sendMessage(profile?.uid || "driver-me", "admin", text.trim());
+      setChatInput("");
+      toast.success(locale === "ta" ? "செய்தி அனுப்பப்பட்டது" : "Message dispatched to dispatcher");
+    } catch (err) {
+      console.error("Send message error:", err?.message || err);
+      toast.error(locale === "ta" ? "செய்தி அனுப்புவதில் பிழை" : "Failed to send message");
+    }
+  };
+
+
+  // Deliveries sorting: In emergency mode, medical & food come first
+  const sortedDeliveries = useMemo(() => {
+    if (!isEmergency) return deliveries;
+    return [...deliveries].sort((a, b) => {
+      const aRank = a.priority === "medical" ? 0 : a.priority === "food" ? 1 : 2;
+      const bRank = b.priority === "medical" ? 0 : b.priority === "food" ? 1 : 2;
+      return aRank - bRank;
+    });
+  }, [deliveries, isEmergency]);
+
+  // Map Routes Configuration (Real road coordinates + snapped waypoint connectors)
+  const mapRoutes = useMemo(() => {
+    if (!plannedRoutes.length) return [];
+
+    const ROUTE_COLORS = ["#00E5FF", "#F59E0B", "#A855F7"];
+
+    // If QARS has optimized, show the best route glowing, and fade others
+    if (qarsResult?.best) {
+      return plannedRoutes.map((r, idx) => {
+        const isBest = r.id === qarsResult.best.id;
+        return {
+          id: r.id,
+          coords: r.coords,
+          color: isBest ? (isEmergency ? "#EF4444" : "#10B981") : ROUTE_COLORS[idx % ROUTE_COLORS.length],
+          isHighlighted: isBest,
+          isDashed: !isBest,
+          snappedStart: r.snappedStart,
+          snappedEnd: r.snappedEnd,
+          fromCoords: r.fromCoords || [DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng],
+          toCoords: r.toCoords || (selectedDelivery ? [selectedDelivery.lat, selectedDelivery.lng] : null),
+          label: isBest
+            ? `${isEmergency ? "🚨 Emergency Bypass" : "⚡ QARS Optimal"} • ${Math.round(r.distanceM / 1000)} km`
+            : `Alt ${idx + 1} • ${Math.round(r.distanceM / 1000)} km`,
+        };
+      });
+    }
+
+    // Default candidate routes
+    return plannedRoutes.map((r, idx) => ({
+      id: r.id,
+      coords: r.coords,
+      color: ROUTE_COLORS[idx % ROUTE_COLORS.length],
+      isHighlighted: idx === selectedRouteIndex,
+      isDashed: true,
+      snappedStart: r.snappedStart,
+      snappedEnd: r.snappedEnd,
+      fromCoords: r.fromCoords || [DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng],
+      toCoords: r.toCoords || (selectedDelivery ? [selectedDelivery.lat, selectedDelivery.lng] : null),
+      label: `Route ${String.fromCharCode(65 + idx)} • ${Math.round(r.distanceM / 1000)} km • ${Math.round(r.durationS / 60)} min`,
+    }));
+  }, [plannedRoutes, qarsResult, selectedRouteIndex, isEmergency, selectedDelivery]);
+
+  // Vehicles list for FleetMap (Privacy by role: ONLY the logged-in user's own vehicle)
+  const mapVehicles = useMemo(() => {
+    const activeRoute = qarsResult?.best || plannedRoutes[selectedRouteIndex];
+    return [
+      {
+        uid: profile?.uid || profile?.driverId || "my-truck",
+        name: profile?.name || "My Vehicle",
+        vehicleNumber: profile?.vehicleNumber || "TN-37-XX",
+        lat: currentPosition.lat,
+        lng: currentPosition.lng,
+        heading: currentHeading,
+        status: tripStatus === "issue" ? "issue" : tripStatus === "in_transit" ? "on_time" : "idle",
+        role: isEmergency ? "emergency" : "driver",
+        priority: selectedDelivery?.priority || (isEmergency ? "medical" : "normal"),
+        cargoType: selectedDelivery?.cargo || (isEmergency ? "Liquid Medical Oxygen" : "Freight"),
+        routeCoords: activeRoute?.coords,
+        currentDistM: isSimulating ? simulationStepRef.current : undefined,
+      },
+    ];
+  }, [profile, currentPosition, currentHeading, tripStatus, isEmergency, selectedDelivery, qarsResult, plannedRoutes, selectedRouteIndex, isSimulating]);
+
+
+  // Sparkline coordinates generator
+  const sparklinePoints = useMemo(() => {
+    if (!qarsResult?.convergence || qarsResult.convergence.length === 0) return null;
+    const vals = qarsResult.convergence;
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const range = max - min || 1;
+    const w = 150;
+    const h = 36;
+
+    const points = vals
+      .map((v, i) => {
+        const x = (i / (vals.length - 1)) * w;
+        const y = h - ((v - min) / range) * (h - 6) - 3;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      })
+      .join(" ");
+
+    const area = `0,${h} ${points} ${w},${h}`;
+    return { points, area };
+  }, [qarsResult]);
+
+  return (
+    <div className="relative w-full min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+      {/* Top Header Bar */}
+      <header className="h-16 px-4 sm:px-6 border-b border-glass-border bg-slate-950/80 backdrop-blur-xl flex items-center justify-between z-30 sticky top-0">
+        <div className="flex items-center gap-3">
+          <Link href="/" className="flex items-center gap-2 group">
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center border ${accentBorder} bg-white/5`}>
+              <Truck className={`w-5 h-5 ${isEmergency ? "text-red-400" : "text-cyan-400"}`} />
+            </div>
+            <div className="hidden sm:block">
+              <span className="font-bold tracking-tight text-white flex items-center gap-1.5">
+                RippleRoute
+                {isEmergency && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 border border-red-500/30 uppercase font-mono tracking-wider font-extrabold animate-pulse">
+                    PRIORITY ROUTING
+                  </span>
+                )}
+              </span>
+              <span className="text-[11px] text-slate-400 block -mt-1 font-mono">
+                {isEmergency ? "Emergency Rapid Transit" : "Driver Cockpit"}
+              </span>
+            </div>
+          </Link>
+        </div>
+
+        {/* Center telemetry: Driver & Vehicle Info */}
+        <div className="flex items-center gap-3">
+          <div className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 border border-glass-border">
+            <span className="text-xs text-slate-300 font-medium">{profile?.name || "Karthik Raja"}</span>
+            <span className="text-slate-500 text-xs">•</span>
+            <span className="text-xs font-mono text-cyan-300">{profile?.vehicleNumber || "TN-37-BY-4512"}</span>
+            <Badge variant={tripStatus === "in_transit" ? "success" : tripStatus === "issue" ? "danger" : "default"}>
+              {tripStatus === "in_transit" ? "In Transit" : tripStatus === "delivered" ? "Delivered" : "Standby"}
+            </Badge>
+          </div>
+
+          {/* Live digital clock */}
+          <div className="px-2.5 py-1 rounded-lg bg-black/40 border border-white/10 font-mono text-xs text-slate-300 flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-slate-400" />
+            <span>{currentTimeStr || "--:--:--"}</span>
+          </div>
+        </div>
+
+        {/* Right Tools: Language, Theme, Chat Drawer trigger, Logout */}
+        <div className="flex items-center gap-2">
+          {/* Language Toggle */}
+          <button
+            onClick={() => setLanguage(locale === "en" ? "ta" : "en")}
+            className="px-2.5 py-1 text-xs font-medium rounded-lg bg-white/5 hover:bg-white/10 border border-glass-border transition-colors flex items-center gap-1"
+            title="Toggle English / தமிழ்"
+          >
+            <Globe className="w-3.5 h-3.5 text-slate-400" />
+            <span>{locale === "en" ? "தமிழ்" : "EN"}</span>
+          </button>
+
+          {/* Theme Toggle */}
+          <button
+            onClick={toggleTheme}
+            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-glass-border transition-colors text-slate-300"
+            title="Toggle theme"
+          >
+            {theme === "dark" ? <Sun className="w-4 h-4 text-amber-300" /> : <Moon className="w-4 h-4 text-slate-300" />}
+          </button>
+
+          {/* Dispatcher Chat Drawer Trigger */}
+          <button
+            onClick={() => setIsChatOpen(true)}
+            className="relative p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-glass-border transition-colors text-cyan-400"
+            title="Open Dispatcher Comms"
+          >
+            <MessageSquare className="w-4 h-4" />
+            {messages.length > 0 && (
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-cyan-400 rounded-full animate-ping" />
+            )}
+          </button>
+
+          {/* Logout */}
+          <button
+            onClick={logout}
+            className="p-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 text-slate-400 hover:text-red-300 border border-glass-border transition-colors"
+            title="Sign out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        </div>
+      </header>
+
+      {/* Main Layout: Desktop = ~68% Map left + Side Panel right; Mobile = Map top + Bottom Sheet */}
+      <div className="flex-1 flex flex-col lg:flex-row relative overflow-hidden">
+        {/* Left: Map Section (~68% on desktop) */}
+        <div className="w-full lg:w-[68%] h-[42vh] lg:h-[calc(100vh-64px)] relative flex-shrink-0">
+          <FleetMap
+            center={[currentPosition.lat, currentPosition.lng]}
+            zoom={13}
+            vehicles={mapVehicles}
+            routes={mapRoutes}
+            hazards={hazards}
+            deliveries={deliveries}
+            selectedUid={profile?.uid || "driver-me"}
+            height="100%"
+            showDepot={true}
+            depotCoords={[DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng]}
+          />
+
+          {/* Simulation & Telemetry Floating Bar on Map */}
+          <div className="absolute top-4 left-4 z-10 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => setIsSimulating(!isSimulating)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold backdrop-blur-md border shadow-lg flex items-center gap-1.5 transition-all ${
+                isSimulating
+                  ? "bg-amber-500/20 border-amber-500/50 text-amber-300 animate-pulse"
+                  : "bg-slate-900/80 border-glass-border text-slate-200 hover:bg-white/10"
+              }`}
+            >
+              {isSimulating ? <Square className="w-3.5 h-3.5 fill-current" /> : <Play className="w-3.5 h-3.5" />}
+              <span>{isSimulating ? "Stop Simulation" : "Simulate Drive"}</span>
+            </button>
+
+            <div className="px-3 py-1.5 rounded-xl text-xs bg-slate-900/80 backdrop-blur-md border border-glass-border text-slate-300 font-mono hidden sm:flex items-center gap-2">
+              <Compass className="w-3.5 h-3.5 text-cyan-400" />
+              <span>{currentHeading.toFixed(0)}°</span>
+              <span className="text-slate-600">|</span>
+              <span>{currentPosition.lat.toFixed(4)}, {currentPosition.lng.toFixed(4)}</span>
+            </div>
+          </div>
+
+          {/* Retry chip on the map when road data is unavailable */}
+          {plannedRoutes.length === 0 && !isPlanningRoutes && selectedDelivery && (
+            <div className="absolute top-16 left-4 z-10 flex items-center gap-2 p-2 rounded-xl bg-slate-950/90 border border-amber-500/40 shadow-xl backdrop-blur-md">
+              <span className="text-xs text-amber-300 font-semibold flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span>Road data unavailable</span>
+              </span>
+              <button
+                onClick={handlePlanRoute}
+                className="px-2.5 py-1 text-xs font-bold rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+        </div>
+
+
+        {/* Right: Glass Side Panel (~32% on desktop, bottom sheet on mobile) */}
+        <div className="w-full lg:w-[32%] flex-1 lg:h-[calc(100vh-64px)] overflow-y-auto bg-slate-950/95 lg:bg-slate-950/85 backdrop-blur-2xl border-t lg:border-t-0 lg:border-l border-glass-border p-4 sm:p-5 flex flex-col gap-5">
+          {/* Mobile Drag Indicator */}
+          <div className="w-12 h-1 bg-white/20 rounded-full mx-auto lg:hidden -mt-1 mb-1" />
+
+          {/* SECTION 1: Driver Cockpit Header */}
+          <div className={`p-4 rounded-2xl bg-white/[0.03] border ${accentBorder} relative overflow-hidden`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-[11px] font-mono uppercase tracking-wider text-slate-400">
+                  {isEmergency ? "Priority Corridors Enabled" : "Active Vehicle Unit"}
+                </span>
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  {profile?.vehicleNumber || "TN-37-BY-4512"}
+                  {isEmergency && (
+                    <span className="text-base" title="Emergency Priority Cargo">
+                      🏥
+                    </span>
+                  )}
+                </h2>
+              </div>
+              <div className="text-right">
+                <span className="text-[11px] text-slate-400 block font-mono">Current Status</span>
+                <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1 justify-end">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
+                  {tripStatus.toUpperCase()}
+                </span>
+              </div>
+            </div>
+
+            {/* Quick Trip Controls */}
+            <div className="grid grid-cols-2 gap-2 mt-4">
+              <button
+                onClick={handleStartTrip}
+                disabled={tripStatus === "in_transit"}
+                className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                  tripStatus === "in_transit"
+                    ? "bg-white/5 text-slate-500 cursor-not-allowed border border-white/5"
+                    : "bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40"
+                }`}
+              >
+                <Play className="w-3.5 h-3.5" />
+                <span>Start Trip</span>
+              </button>
+
+              <button
+                onClick={handleMarkDelivered}
+                disabled={tripStatus === "delivered" || !selectedDelivery}
+                className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+                  tripStatus === "delivered"
+                    ? "bg-white/5 text-slate-500 cursor-not-allowed border border-white/5"
+                    : "bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40"
+                }`}
+              >
+                <CheckCircle className="w-3.5 h-3.5" />
+                <span>Mark Delivered</span>
+              </button>
+            </div>
+          </div>
+
+          {/* SECTION 2: My Deliveries */}
+          <div className="flex flex-col gap-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                <Package className="w-3.5 h-3.5 text-cyan-400" />
+                <span>My Deliveries ({deliveries.length})</span>
+              </h3>
+              <button
+                onClick={refreshDeliveries}
+                className="text-[11px] text-slate-400 hover:text-white transition-colors flex items-center gap-1"
+              >
+                <RefreshCw className={`w-3 h-3 ${loadingDeliveries ? "animate-spin" : ""}`} />
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
+              {sortedDeliveries.map((del) => {
+                const isSelected = selectedDelivery?.id === del.id;
+                const isMed = del.priority === "medical";
+                const isFood = del.priority === "food";
+
+                return (
+                  <div
+                    key={del.id}
+                    onClick={() => {
+                      setSelectedDelivery(del);
+                      setTripStatus(del.status || "open");
+                    }}
+                    className={`p-3 rounded-xl border transition-all cursor-pointer text-left flex items-start justify-between gap-3 ${
+                      isSelected
+                        ? isEmergency
+                          ? "bg-red-500/15 border-red-500 shadow-md"
+                          : "bg-cyan-500/15 border-cyan-400 shadow-md"
+                        : "bg-white/[0.02] hover:bg-white/[0.06] border-glass-border"
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-mono text-xs font-bold text-white">{del.code}</span>
+                        {isMed && (
+                          <span className="px-1.5 py-0.2 rounded text-[10px] bg-red-500/20 text-red-300 border border-red-500/30 flex items-center gap-0.5">
+                            <HeartPulse className="w-3 h-3 text-red-400" />
+                            <span>Medical</span>
+                          </span>
+                        )}
+                        {isFood && (
+                          <span className="px-1.5 py-0.2 rounded text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-0.5">
+                            <UtensilsCrossed className="w-3 h-3 text-amber-400" />
+                            <span>Perishable</span>
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs font-medium text-slate-200 mt-1 truncate">
+                        {del.customerName}
+                      </div>
+                      <div className="text-[11px] text-slate-400 truncate">
+                        {del.address}
+                      </div>
+                      <div className="text-[11px] text-cyan-400 font-mono mt-0.5">
+                        📦 {del.cargo}
+                      </div>
+                    </div>
+
+                    <div className="text-right flex flex-col items-end justify-between self-stretch">
+                      <span className="text-[11px] font-mono text-slate-400">{del.etaText}</span>
+                      <span
+                        className={`text-[10px] uppercase font-mono px-1.5 py-0.5 rounded ${
+                          del.status === "delivered"
+                            ? "bg-emerald-500/20 text-emerald-300"
+                            : del.status === "in_transit"
+                            ? "bg-cyan-500/20 text-cyan-300"
+                            : "bg-slate-800 text-slate-300"
+                        }`}
+                      >
+                        {del.status}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* SECTION 3: Plan Route & Candidates */}
+          <div className="flex flex-col gap-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                <Navigation className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Candidate Routes</span>
+              </h3>
+              <button
+                onClick={handlePlanRoute}
+                disabled={isPlanningRoutes || !selectedDelivery}
+                className="text-xs text-cyan-400 hover:text-cyan-300 font-medium flex items-center gap-1"
+              >
+                <RefreshCw className={`w-3 h-3 ${isPlanningRoutes ? "animate-spin" : ""}`} />
+                <span>Re-plan</span>
+              </button>
+            </div>
+
+            {/* Candidate Route Cards */}
+            {plannedRoutes.length === 0 && !isPlanningRoutes ? (
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-2">
+                <span className="text-xs text-amber-300 font-medium flex items-center gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span>Road data unavailable — Retry</span>
+                </span>
+                <button
+                  onClick={handlePlanRoute}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-cyan-500 text-slate-950 hover:bg-cyan-400"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {plannedRoutes.map((route, idx) => {
+                  const isSelected = selectedRouteIndex === idx;
+                  const km = (route.distanceM / 1000).toFixed(1);
+                  const min = Math.round(route.durationS / 60);
+
+                  // Count hazards touching this candidate
+                  const hitCount = hazards.filter((h) => {
+                    if (!h.active) return false;
+                    return minDistanceToPolylineMeters({ lat: h.lat, lng: h.lng }, route.coords) <= ((h.radiusM || 300) + 150);
+                  }).length;
+
+                  return (
+                    <button
+                      key={route.id}
+                      onClick={() => {
+                        setSelectedRouteIndex(idx);
+                        setQarsResult(null); // Reset optimization if manually picking candidate
+                      }}
+                      className={`p-2.5 rounded-xl border text-left transition-all relative ${
+                        isSelected
+                          ? "bg-cyan-500/20 border-cyan-400 shadow-md"
+                          : "bg-white/[0.02] hover:bg-white/[0.05] border-glass-border"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] font-bold text-white font-mono">
+                          Route {String.fromCharCode(65 + idx)}
+                        </span>
+                        {hitCount > 0 ? (
+                          <span className="text-[10px] text-amber-400 flex items-center gap-0.5" title="Hazards on route">
+                            <AlertTriangle className="w-3 h-3 text-amber-400" />
+                            <span>{hitCount}</span>
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-emerald-400" title="Safe corridor">
+                            ✓
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-sm font-extrabold text-slate-100 mt-1">{min} min</div>
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="text-[10px] text-slate-400 font-mono">{km} km</span>
+                        <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-white/10 text-slate-300 border border-white/10">
+                          Road data: OSM
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 4: Glowing QARS Button & Result Card */}
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={handleRunQars}
+              disabled={isOptimizing || plannedRoutes.length === 0}
+              className={`w-full py-3 px-4 rounded-xl font-bold text-sm tracking-wide flex items-center justify-center gap-2 transition-all relative overflow-hidden group ${
+                isEmergency
+                  ? "bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white shadow-[0_0_25px_rgba(239,68,68,0.5)] hover:shadow-[0_0_35px_rgba(239,68,68,0.8)]"
+                  : "bg-gradient-to-r from-cyan-500 via-blue-600 to-violet-600 text-white shadow-[0_0_25px_rgba(0,229,255,0.4)] hover:shadow-[0_0_35px_rgba(0,229,255,0.7)]"
+              }`}
+            >
+              <Sparkles className={`w-4 h-4 ${isOptimizing ? "animate-spin" : "group-hover:rotate-12 transition-transform"}`} />
+              <span>{isOptimizing ? "Synthesizing Quantum Swarm..." : "Optimize with QARS ⚛"}</span>
+            </button>
+
+            {/* QARS Result Card with Sparkline */}
+            {qarsResult && (
+              <div className={`p-4 rounded-2xl bg-white/[0.04] border ${accentBorder} relative overflow-hidden`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="text-xs font-bold text-white uppercase tracking-wider">
+                      Best Route Selected
+                    </span>
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-slate-300 border border-white/10">
+                      Road data: OSM
+                    </span>
+                  </div>
+                  <span className="text-xs font-extrabold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full font-mono">
+                    Save {qarsResult.timeSavedMin} min
+                  </span>
+                </div>
+
+
+                <div className="grid grid-cols-2 gap-2 text-xs font-mono text-slate-300 mb-3">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Estimated Travel</span>
+                    <span className="text-sm font-bold text-white">
+                      {Math.round((qarsResult.best?.durationS || 0) / 60)} min
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Hazards Avoided</span>
+                    <span className="text-sm font-bold text-emerald-400">
+                      {qarsResult.baselineDelayMin > qarsResult.bestDelayMin ? "100% Cleared" : "Direct Pass"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* SVG Convergence Sparkline */}
+                {sparklinePoints && (
+                  <div className="mt-2 pt-2 border-t border-white/10">
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono mb-1">
+                      <span>Quantum Swarm Fitness</span>
+                      <span className="text-cyan-400">40 Iterations</span>
+                    </div>
+                    <svg viewBox="0 0 150 36" className="w-full h-9 overflow-visible">
+                      <polygon points={sparklinePoints.area} fill="rgba(0, 229, 255, 0.15)" />
+                      <polyline
+                        fill="none"
+                        stroke="#00E5FF"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        points={sparklinePoints.points}
+                      />
+                    </svg>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 5: Safety & Options (Advisories + Audio Read-Aloud) */}
+          <div className="flex flex-col gap-2.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                <span>Safety & Advisory</span>
+              </h3>
+              <button
+                onClick={toggleSpeech}
+                className={`p-1.5 rounded-lg border transition-all flex items-center gap-1 text-xs ${
+                  isSpeaking
+                    ? "bg-cyan-500/20 text-cyan-300 border-cyan-400 animate-pulse"
+                    : "bg-white/5 hover:bg-white/10 text-slate-300 border-glass-border"
+                }`}
+                title="Read aloud via Speech Synthesis"
+              >
+                {isSpeaking ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                <span className="text-[10px]">{isSpeaking ? "Stop" : "Speak"}</span>
+              </button>
+            </div>
+
+            {/* Advisory Lines Card */}
+            <div className="p-3 rounded-xl bg-white/[0.02] border border-glass-border flex flex-col gap-1.5 text-xs">
+              {(locale === "ta" ? advisoryLines.ta : advisoryLines.en).length > 0 ? (
+                (locale === "ta" ? advisoryLines.ta : advisoryLines.en).map((line, idx) => (
+                  <div key={idx} className="flex items-start gap-2 text-slate-300 leading-relaxed">
+                    <span className="text-cyan-400 font-bold">•</span>
+                    <span>{line}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="text-slate-400 italic text-[11px]">
+                  {locale === "ta"
+                    ? "பாதை தெளிவு. வழியில் எவ்வித தீவிர ஆபத்துகளும் இல்லை."
+                    : "Standard corridor confirmed. No active hazards blocking route path."}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* SECTION 6: Report Field Hazards */}
+          <div className="flex flex-col gap-2.5">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+              <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+              <span>Report Incident</span>
+            </h3>
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => handleReportHazard("accident")}
+                className="py-2.5 px-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 text-xs font-semibold flex flex-col items-center gap-1 transition-all"
+              >
+                <span className="text-base">🚧</span>
+                <span className="text-[10px]">Accident</span>
+              </button>
+
+              <button
+                onClick={() => handleReportHazard("breakdown")}
+                className="py-2.5 px-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-semibold flex flex-col items-center gap-1 transition-all"
+              >
+                <span className="text-base">🔧</span>
+                <span className="text-[10px]">Breakdown</span>
+              </button>
+
+              <button
+                onClick={() => handleReportHazard("roadblock")}
+                className="py-2.5 px-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-semibold flex flex-col items-center gap-1 transition-all"
+              >
+                <span className="text-base">⛔</span>
+                <span className="text-[10px]">Roadblock</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* BOTTOM-LEFT HAZARD DANGER TOAST (Spec requirement) */}
+      {activeHazardAlert && (
+        <div className="fixed bottom-6 left-6 z-50 max-w-sm w-full p-4 rounded-2xl bg-slate-950/95 border-2 border-red-500 shadow-[0_0_35px_rgba(239,68,68,0.5)] backdrop-blur-2xl animate-in slide-in-from-bottom duration-300">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl animate-bounce">🚧</span>
+              <div>
+                <h4 className="text-sm font-extrabold text-red-400">
+                  Hazard Ahead on Route!
+                </h4>
+                <p className="text-xs text-slate-200 mt-0.5">
+                  {activeHazardAlert.type.toUpperCase()} — {activeHazardAlert.distMeters || 600} m
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveHazardAlert(null)}
+              className="text-slate-400 hover:text-white p-1"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <p className="text-[11px] text-slate-300 mt-2 line-clamp-2">
+            {activeHazardAlert.note || "Active disruption detected within your corridor perimeter."}
+          </p>
+
+          <div className="grid grid-cols-2 gap-2 mt-3.5">
+            <button
+              onClick={() => {
+                setActiveHazardAlert(null);
+                handleRunQars(); // Re-runs QARS with the new hazard included
+              }}
+              className="py-2 px-3 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center justify-center gap-1 transition-all shadow-md"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Alternative Route</span>
+            </button>
+
+            <button
+              onClick={async () => {
+                await sendMessage(
+                  profile?.uid || "driver-me",
+                  "admin",
+                  `URGENT ALERT: Driver reported hazard ${activeHazardAlert.type} at ${activeHazardAlert.distMeters}m.`
+                );
+                setTripStatus("issue");
+                setActiveHazardAlert(null);
+                toast.warning(locale === "ta" ? "நிறுவனத்திற்கு தகவல் அனுப்பப்பட்டது" : "Control room notified of issue");
+              }}
+              className="py-2 px-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-xs border border-white/20 flex items-center justify-center gap-1 transition-all"
+            >
+              <Phone className="w-3.5 h-3.5 text-amber-400" />
+              <span>Inform Company</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* DISPATCHER CHAT DRAWER */}
+      <Drawer
+        isOpen={isChatOpen}
+        onClose={() => setIsChatOpen(false)}
+        title="Control Room Dispatch Comms"
+        description="Direct two-way channel with KovaiSwift Logistics management team"
+        position="right"
+      >
+        <div className="flex flex-col h-[75vh] justify-between">
+          {/* Messages List */}
+          <div className="flex-1 overflow-y-auto space-y-3 p-2">
+            {messages.length === 0 ? (
+              <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 text-xs">
+                <MessageSquare className="w-8 h-8 text-slate-600 mb-2" />
+                <span>No messages yet. Send a quick status update below.</span>
+              </div>
+            ) : (
+              messages.map((m) => {
+                const isMe = m.fromUid === (profile?.uid || "driver-me");
+                return (
+                  <div
+                    key={m.id}
+                    className={`flex flex-col ${isMe ? "items-end" : "items-start"}`}
+                  >
+                    <div
+                      className={`max-w-[80%] p-3 rounded-2xl text-xs ${
+                        isMe
+                          ? "bg-cyan-500 text-slate-950 font-medium rounded-br-none"
+                          : "bg-white/10 text-slate-200 rounded-bl-none border border-white/10"
+                      }`}
+                    >
+                      {m.text}
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-1 font-mono">
+                      {new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Quick Reply Pills */}
+          <div className="pt-3 border-t border-glass-border">
+            <div className="text-[10px] font-mono text-slate-400 uppercase mb-2">Quick Replies</div>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {["Delayed", "Delivered", "Need help"].map((qr) => (
+                <button
+                  key={qr}
+                  onClick={() => handleSendMessage(qr)}
+                  className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/15 border border-glass-border text-xs text-slate-200 transition-colors"
+                >
+                  {qr}
+                </button>
+              ))}
+            </div>
+
+            {/* Chat Input */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendMessage();
+              }}
+              className="flex items-center gap-2"
+            >
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Type advisory or status..."
+                className="flex-1 bg-white/5 border border-glass-border rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+              />
+              <button
+                type="submit"
+                disabled={!chatInput.trim()}
+                className="p-2 bg-cyan-500 disabled:opacity-40 text-slate-950 rounded-xl hover:bg-cyan-400 transition-colors"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </form>
+          </div>
+        </div>
+      </Drawer>
+    </div>
+  );
+}

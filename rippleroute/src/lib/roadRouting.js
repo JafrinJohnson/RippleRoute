@@ -4,16 +4,18 @@
  * ROAD RULE:
  * Every route line in the app comes from getRoadRoutes (real road geometry, overview=full)
  * and every moving vehicle moves only along its route with routeAnimator.
- * Never draw or animate straight lines between start and end.
+ * Never draw or animate straight or synthetic curved lines between start and end.
  */
+
+import { haversineMeters } from "./geo";
 
 // In-memory cache for OSRM route calculations
 const routeCache = new Map();
 
 // OSRM Public Endpoint Fallback List
 const OSRM_SERVERS = [
-  { name: "osrm-project", url: "https://router.project-osrm.org/route/v1/driving" },
-  { name: "osm-de", url: "https://routing.openstreetmap.de/routed-car/route/v1/driving" },
+  { name: "OSM", url: "https://router.project-osrm.org/route/v1/driving" },
+  { name: "OSM-DE", url: "https://routing.openstreetmap.de/routed-car/route/v1/driving" },
 ];
 
 /**
@@ -44,7 +46,10 @@ async function fetchOsrmRoute(serverUrl, coordString, alternatives, timeoutMs = 
       throw new Error(`OSRM non-Ok code: ${data.code || "unknown"}`);
     }
 
-    return data.routes;
+    return {
+      routes: data.routes,
+      waypoints: data.waypoints || [],
+    };
   } catch (err) {
     clearTimeout(timer);
     throw err;
@@ -56,7 +61,7 @@ async function fetchOsrmRoute(serverUrl, coordString, alternatives, timeoutMs = 
  * @param {{lat: number, lng: number}} from 
  * @param {{lat: number, lng: number}} to 
  * @param {{alternatives?: boolean, via?: {lat: number, lng: number}|null}} options 
- * @returns {Promise<Array<{id: string, coords: [number, number][], distanceM: number, durationS: number, source: string}>>}
+ * @returns {Promise<Array<{id: string, coords: [number, number][], distanceM: number, durationS: number, source: string, snappedStart: [number, number], snappedEnd: [number, number], fromCoords: [number, number], toCoords: [number, number]}>>}
  */
 export async function getRoadRoutes(from, to, { alternatives = true, via = null } = {}) {
   if (!from || !to || typeof from.lat !== "number" || typeof from.lng !== "number" || typeof to.lat !== "number" || typeof to.lng !== "number") {
@@ -77,7 +82,7 @@ export async function getRoadRoutes(from, to, { alternatives = true, via = null 
     return routeCache.get(cacheKey);
   }
 
-  // Build OSRM coordinate string: "lng,lat;lng,lat" (with via in the middle if specified)
+  // Build OSRM coordinate string: "lng,lat;lng,lat" (GeoJSON / OSRM takes [lng, lat])
   const coordsList = [];
   coordsList.push(`${from.lng.toFixed(6)},${from.lat.toFixed(6)}`);
   if (via && typeof via.lat === "number" && typeof via.lng === "number") {
@@ -86,86 +91,66 @@ export async function getRoadRoutes(from, to, { alternatives = true, via = null 
   coordsList.push(`${to.lng.toFixed(6)},${to.lat.toFixed(6)}`);
   const coordString = coordsList.join(";");
 
-  let rawRoutes = null;
-  let usedServer = null;
+  let rawResult = null;
+  let usedServerName = "OSM";
 
   // Attempt servers in sequence
   for (const server of OSRM_SERVERS) {
     try {
-      rawRoutes = await fetchOsrmRoute(server.url, coordString, alternatives, 8000);
-      usedServer = server.name;
+      rawResult = await fetchOsrmRoute(server.url, coordString, alternatives, 8000);
+      usedServerName = server.name;
       break;
     } catch (err) {
       console.warn(`[roadRouting] ${server.name} failed:`, err.message);
     }
   }
 
-  // If both servers failed, return empty array (do NOT draw straight lines)
-  if (!rawRoutes || rawRoutes.length === 0) {
+  // If all servers failed, return empty array (do NOT draw straight or synthetic lines)
+  if (!rawResult || !Array.isArray(rawResult.routes) || rawResult.routes.length === 0) {
     return [];
   }
 
-  // Parse OSRM GeoJSON geometry: GeoJSON coordinates are [lng, lat], convert to [lat, lng]
+  const { routes: rawRoutes, waypoints } = rawResult;
+
+  // Snapped road endpoints from OSRM waypoints: OSRM location is [lng, lat] -> convert to Leaflet [lat, lng]
+  const snappedStart = waypoints && waypoints[0]?.location
+    ? [waypoints[0].location[1], waypoints[0].location[0]]
+    : [from.lat, from.lng];
+  const snappedEnd = waypoints && waypoints[waypoints.length - 1]?.location
+    ? [waypoints[waypoints.length - 1].location[1], waypoints[waypoints.length - 1].location[0]]
+    : [to.lat, to.lng];
+
+  // Parse OSRM GeoJSON geometry: GeoJSON coordinates are [lng, lat], convert exactly once to Leaflet [lat, lng]
   const parsedRoutes = rawRoutes.map((r, idx) => {
     const geoCoords = r.geometry?.coordinates || [];
     const latLngCoords = geoCoords.map(([lng, lat]) => [lat, lng]);
     const distanceM = Math.round(r.distance || 0);
     const durationS = Math.round(r.duration || 0);
 
+    // Verify coordinate order: check start and end points
+    if (latLngCoords.length >= 2) {
+      const startDist = haversineMeters(from, latLngCoords[0]);
+      const endDist = haversineMeters(to, latLngCoords[latLngCoords.length - 1]);
+      if (startDist > 50 || endDist > 50) {
+        console.error("route coords swapped");
+      }
+    }
+
     return {
       id: `road-${idx}-${distanceM}`,
       coords: latLngCoords,
       distanceM,
       durationS,
-      source: usedServer,
+      source: "OSM",
+      snappedStart,
+      snappedEnd,
+      fromCoords: [from.lat, from.lng],
+      toCoords: [to.lat, to.lng],
     };
   });
 
   // Filter out any broken or empty routes
-  let validRoutes = parsedRoutes.filter((r) => r.coords.length >= 2);
-
-  // If fewer than 2 alternatives came back and alternatives was requested,
-  // request extra road routes through 1-2 via-points offset ~1.5 km to each side of the midpoint
-  if (alternatives && validRoutes.length < 2 && !via) {
-    try {
-      const midLat = (from.lat + to.lat) / 2;
-      const midLng = (from.lng + to.lng) / 2;
-      const dLat = to.lat - from.lat;
-      const dLng = to.lng - from.lng;
-      const len = Math.sqrt(dLat * dLat + dLng * dLng) || 0.0001;
-
-      // Perpendicular unit vector (-dLng, dLat)
-      const perpLat = -dLng / len;
-      const perpLng = dLat / len;
-
-      // ~1.5 km offset (approx. 0.0135 degrees)
-      const offsetDeg = 0.0135;
-      const viaLeft = { lat: midLat + perpLat * offsetDeg, lng: midLng + perpLng * offsetDeg };
-      const viaRight = { lat: midLat - perpLat * offsetDeg, lng: midLng - perpLng * offsetDeg };
-
-      const extraPromises = [
-        getRoadRoutes(from, to, { alternatives: false, via: viaLeft }),
-        getRoadRoutes(from, to, { alternatives: false, via: viaRight }),
-      ];
-
-      const extraResults = await Promise.allSettled(extraPromises);
-      for (const res of extraResults) {
-        if (res.status === "fulfilled" && Array.isArray(res.value)) {
-          for (const extraRoute of res.value) {
-            // Check for duplicate routes by distance (within 80m difference)
-            const isDuplicate = validRoutes.some(
-              (existing) => Math.abs(existing.distanceM - extraRoute.distanceM) < 80
-            );
-            if (!isDuplicate && extraRoute.coords.length >= 2) {
-              validRoutes.push(extraRoute);
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("[roadRouting] Failed synthesizing via-point alternatives:", err.message);
-    }
-  }
+  const validRoutes = parsedRoutes.filter((r) => r.coords.length >= 2);
 
   // Cache results
   routeCache.set(cacheKey, validRoutes);

@@ -29,12 +29,12 @@ const GANDHIPURAM_COORDS = { lat: 11.0168, lng: 76.9658 }; // Gandhipuram Hub
 const RS_PURAM_COORDS = { lat: 11.0089, lng: 76.9500 }; // RS Puram Center
 const SINGANALLUR_COORDS = { lat: 10.9990, lng: 77.0300 }; // Singanallur Terminal
 
-// Base fleet vehicle profiles
+// Base fleet vehicle profiles (Anonymised for Public Live Map)
 const FLEET_PROFILES = [
   {
     uid: "drv-01",
-    name: "Karthik Raja",
-    vehicleNumber: "TN 38 BX 4521",
+    name: "Truck 1",
+    vehicleNumber: "Truck 1",
     status: "on_time",
     role: "driver",
     priority: "normal",
@@ -45,8 +45,8 @@ const FLEET_PROFILES = [
   },
   {
     uid: "drv-02",
-    name: "Priya R",
-    vehicleNumber: "TN 38 AZ 7790",
+    name: "Emergency 1",
+    vehicleNumber: "Emergency 1",
     status: "delayed",
     role: "emergency",
     priority: "medical",
@@ -58,21 +58,21 @@ const FLEET_PROFILES = [
   },
   {
     uid: "drv-03",
-    name: "Murugan K",
-    vehicleNumber: "TN 37 CW 3321",
+    name: "Emergency 2",
+    vehicleNumber: "Emergency 2",
     status: "at_risk",
     role: "emergency",
     priority: "food",
     speedKmh: 36,
-    cargoType: "Agricultural Perishables (Peelamedu → Singanallur)",
+    cargoType: "Perishable Produce (Peelamedu → Singanallur)",
     isEmergency: true,
     routeTarget: "singanallur",
     progressRatio: 0.28,
   },
   {
     uid: "drv-04",
-    name: "Kavya S (Ops Support)",
-    vehicleNumber: "TN 37 X 5510",
+    name: "Truck 2",
+    vehicleNumber: "Truck 2",
     status: "idle",
     role: "driver",
     priority: "normal",
@@ -82,6 +82,7 @@ const FLEET_PROFILES = [
     progressRatio: 0,
   },
 ];
+
 
 // Sample Coimbatore hazards
 const SAMPLE_HAZARDS = [
@@ -498,12 +499,15 @@ export default function LiveMapPage() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-bold text-white flex items-center gap-2">
                   <Truck className="w-4 h-4 text-cyan-400" />
-                  Active Fleet Telemetry
+                  Live Fleet (Public Anonymised)
                 </h2>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 font-mono text-muted">
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-mono">
                   {vehicles.length} Units
                 </span>
               </div>
+              <p className="text-[10px] text-slate-400 mb-3">
+                Identities & registrations anonymised for public view. Full telemetry available in Admin Dispatch.
+              </p>
 
               <div className="flex flex-col gap-2.5">
                 {vehicles.map((v) => {

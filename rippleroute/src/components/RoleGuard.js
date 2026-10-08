@@ -15,7 +15,7 @@ export default function RoleGuard({ children, allowedRole }) {
 
     // 1. Not authenticated -> redirect to login
     if (!profile) {
-      router.push("/login");
+      router.replace("/login");
       return;
     }
 
@@ -29,8 +29,9 @@ export default function RoleGuard({ children, allowedRole }) {
           : profile.role === "emergency"
           ? "/emergency"
           : "/login";
-      router.push(destination);
+      router.replace(destination);
     }
+
   }, [profile, loading, allowedRole, router]);
 
   // Branded mission-control loading screen while evaluating session

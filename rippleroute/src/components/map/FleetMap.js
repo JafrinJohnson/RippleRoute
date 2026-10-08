@@ -686,16 +686,48 @@ export default function FleetMap({
         {routes.map((route) => {
           const coords = route.coords || route.waypoints || [];
           if (!coords || coords.length === 0) return null;
-          const isHighlighted = !!route.highlighted;
-          const isDashed = !!route.dashed;
+          const isHighlighted = !!route.highlighted || !!route.isHighlighted;
+          const isDashed = route.dashed !== undefined ? !!route.dashed : !!route.isDashed;
           const routeColor = route.color || (isHighlighted ? "#00E5FF" : "#7C5CFF");
 
           return (
             <React.Fragment key={route.id || Math.random()}>
+              {/* Thin dotted connector from delivery pin / requested start to snapped road start */}
+              {route.snappedStart && (route.fromCoords || depotCoords) && (
+                <Polyline
+                  positions={[route.fromCoords || depotCoords, route.snappedStart]}
+                  smoothFactor={0}
+                  noClip={false}
+                  pathOptions={{
+                    color: "#94A3B8",
+                    weight: 2,
+                    dashArray: "3, 5",
+                    opacity: 0.85,
+                  }}
+                />
+              )}
+
+              {/* Thin dotted connector from snapped road end to requested destination pin */}
+              {route.snappedEnd && (route.toCoords || route.destinationCoords) && (
+                <Polyline
+                  positions={[route.snappedEnd, route.toCoords || route.destinationCoords]}
+                  smoothFactor={0}
+                  noClip={false}
+                  pathOptions={{
+                    color: "#94A3B8",
+                    weight: 2,
+                    dashArray: "3, 5",
+                    opacity: 0.85,
+                  }}
+                />
+              )}
+
               {/* Glow Polyline underneath for highlighted route */}
               {isHighlighted && (
                 <Polyline
                   positions={coords}
+                  smoothFactor={0}
+                  noClip={false}
                   pathOptions={{
                     color: routeColor,
                     weight: 12,
@@ -708,6 +740,8 @@ export default function FleetMap({
               {/* Foreground Polyline */}
               <Polyline
                 positions={coords}
+                smoothFactor={0}
+                noClip={false}
                 pathOptions={{
                   color: routeColor,
                   weight: isHighlighted ? 5 : 3.5,

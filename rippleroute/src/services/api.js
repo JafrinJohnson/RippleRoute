@@ -1,302 +1,315 @@
 /**
- * RippleRoute — Core API Service Gateway
- * 
- * FRONTEND-FIRST RULE:
+ * RippleRoute — Core API Service Gateway (STEP 1)
+ *
+ * This is the ONLY data layer for RippleRoute.
  * All application data access and mutations MUST strictly route through this module.
- * It provides mock data with simulated asynchronous latency and error handling.
- * In subsequent development phases, this file will interface with Firebase and backend endpoints
- * WITHOUT changing any function names, arguments, or return data structures.
+ * Later phases will replace the internal implementation with Firebase/Live backends
+ * without changing any exported function names, parameters, or return shapes.
  */
 
-// Central reference coordinates for KovaiSwift Logistics
-export const DEPOT_PEELAMEDU = { lat: 11.0270, lng: 77.0100, name: "Peelamedu Central Depot" };
+import { mockStore, DEPOT_PEELAMEDU } from "./mockStore";
+import { haversineMeters, minDistanceToPolylineMeters } from "@/lib/geo";
+
+export { DEPOT_PEELAMEDU };
 export const COIMBATORE_CENTER = { lat: 11.0168, lng: 76.9558, name: "Coimbatore City Center" };
 
-// Deterministic mock datasets
-const MOCK_DRIVERS = [
-  {
-    id: "drv-01",
-    name: "Karthik Raja",
-    phone: "+91 98421 23011",
-    role: "driver",
-    status: "active",
-    vehicle: "TN-37-BY-4512 (EV Van)",
-    currentLocation: { lat: 11.0180, lng: 76.9620 },
-    assignedRouteId: "route-01",
-    cargoType: "Standard Freight",
-    destination: "Gandhipuram Hub",
-    etaMinutes: 14,
-    batteryPercent: 82,
-  },
-  {
-    id: "drv-02",
-    name: "Praveen Kumar",
-    phone: "+91 98421 88402",
-    role: "emergency",
-    status: "disrupted",
-    vehicle: "TN-38-AL-9014 (Refrigerated Med)",
-    currentLocation: { lat: 11.1012, lng: 76.9421 },
-    assignedRouteId: "route-02",
-    cargoType: "Medical Oxygen & Vaccines",
-    destination: "Mettupalayam GH",
-    etaMinutes: 38,
-    isEmergency: true,
-    lifespanRemainingHours: 3.5,
-  },
-  {
-    id: "drv-03",
-    name: "Senthil Nathan",
-    phone: "+91 94433 11209",
-    role: "driver",
-    status: "active",
-    vehicle: "TN-37-CW-3321 (Heavy Hauler)",
-    currentLocation: { lat: 10.9980, lng: 77.0340 },
-    assignedRouteId: "route-03",
-    cargoType: "Agricultural Perishables",
-    destination: "Singanallur Terminal",
-    etaMinutes: 22,
-    batteryPercent: 64,
-  },
-  {
-    id: "drv-04",
-    name: "Ananya Subramanian",
-    phone: "+91 97890 55641",
-    role: "emergency",
-    status: "rerouted",
-    vehicle: "TN-38-K-1100 (Rapid Transit)",
-    currentLocation: { lat: 11.0420, lng: 76.9950 },
-    assignedRouteId: "route-04",
-    cargoType: "Critical Organ Transplant Transit",
-    destination: "KMCH Avinashi Road",
-    etaMinutes: 9,
-    isEmergency: true,
-    lifespanRemainingHours: 1.2,
-  },
-];
-
-const MOCK_HAZARDS = [
-  {
-    id: "haz-101",
-    type: "landslide",
-    severity: "critical",
-    location: { lat: 11.2340, lng: 76.9150 },
-    roadName: "Mettupalayam–Kallar Ghat Road (KM 14)",
-    reportedAt: "10 mins ago",
-    advisoryEn: "Active rockfall and debris on hairpins 3 & 4. Ghat pass closed for heavy traffic.",
-    advisoryTa: "கொண்டை ஊசி வளைவு 3 & 4ல் பாறை மற்றும் மண் சரிவு. கனரக வாகன போக்குவரத்து நிறுத்தம்.",
-    affectedRoutes: ["route-02"],
-    clearedStatus: false,
-  },
-  {
-    id: "haz-102",
-    type: "accident",
-    severity: "high",
-    location: { lat: 11.0250, lng: 76.9800 },
-    roadName: "Avinashi Road Flyover near Lakshmi Mills",
-    reportedAt: "25 mins ago",
-    advisoryEn: "Multi-vehicle pileup on west-bound lane. Moderate delay of 18 minutes expected.",
-    advisoryTa: "லட்சுமி மில்ஸ் அருகே மேற்கு வழித்தடத்தில் விபத்து. 18 நிமிடம் தாமதம் எதிர்பார்க்கப்படுகிறது.",
-    affectedRoutes: ["route-01", "route-04"],
-    clearedStatus: false,
-  },
-  {
-    id: "haz-103",
-    type: "rain",
-    severity: "medium",
-    location: { lat: 10.9850, lng: 76.9600 },
-    roadName: "Lanka Corner Railway Underpass",
-    reportedAt: "40 mins ago",
-    advisoryEn: "Heavy waterlogging under railway bridge. Light commercial vehicles diverted via Town Hall.",
-    advisoryTa: "ரயில்வே மேம்பாலத்தின் கீழ் கடுமையான நீர் தேக்கம். வாகனங்கள் டவுன்ஹால் வழியாக திருப்பிவிடப்படுகின்றன.",
-    affectedRoutes: ["route-03"],
-    clearedStatus: false,
-  },
-];
-
-const MOCK_ROUTES = [
-  {
-    id: "route-01",
-    driverId: "drv-01",
-    name: "Peelamedu to Gandhipuram Express",
-    status: "optimal",
-    waypoints: [
-      [11.0270, 77.0100],
-      [11.0210, 76.9950],
-      [11.0180, 76.9620],
-      [11.0168, 76.9558],
-    ],
-    distanceKm: 8.4,
-    currentDurationMin: 22,
-    optimizedDurationMin: 15,
-    qarsOptimized: false,
-  },
-  {
-    id: "route-02",
-    driverId: "drv-02",
-    name: "Peelamedu to Mettupalayam Ghat Lifeline",
-    status: "disrupted",
-    waypoints: [
-      [11.0270, 77.0100],
-      [11.0800, 76.9800],
-      [11.1900, 76.9300],
-      [11.2340, 76.9150],
-      [11.3000, 76.9400],
-    ],
-    distanceKm: 38.6,
-    currentDurationMin: 68,
-    optimizedDurationMin: 44,
-    qarsOptimized: false,
-  },
-];
-
-// Helpers
-const delay = (ms = 200) => new Promise((resolve) => setTimeout(resolve, ms));
-
 /**
- * Fetch all active driver telemetries
+ * 1. getDeliveries()
+ * @returns {Promise<Array<{id: string, code: string, customerName: string, customerPhone: string, address: string, lat: number, lng: number, cargo: string, priority: "medical"|"food"|"normal", status: "open"|"in_transit"|"delivered"|"delayed", assignedTo: string|null, etaText: string}>>}
  */
-export async function getDrivers() {
-  try {
-    await delay(120);
-    return { success: true, data: [...MOCK_DRIVERS] };
-  } catch (error) {
-    console.error("API Error getDrivers:", error);
-    return { success: false, data: [], error: error.message };
-  }
+export async function getDeliveries() {
+  await new Promise((r) => setTimeout(r, 60));
+  return mockStore.getDeliveries();
 }
 
 /**
- * Fetch a single driver by ID
+ * 2. updateDelivery(id, patch)
+ * @param {string} id
+ * @param {object} patch
+ * @returns {Promise<{ok: boolean}>}
  */
-export async function getDriverById(id) {
-  try {
-    await delay(100);
-    const driver = MOCK_DRIVERS.find((d) => d.id === id);
-    if (!driver) return { success: false, error: "Driver not found" };
-    return { success: true, data: driver };
-  } catch (error) {
-    console.error("API Error getDriverById:", error);
-    return { success: false, error: error.message };
-  }
+export async function updateDelivery(id, patch) {
+  await new Promise((r) => setTimeout(r, 60));
+  const success = mockStore.updateDelivery(id, patch);
+  return { ok: Boolean(success) };
 }
 
 /**
- * Fetch all active hazards and weather advisories
+ * 3. getHazards()
+ * @returns {Promise<Array<{id: string, type: "accident"|"roadblock"|"breakdown"|"rain"|"landslide", lat: number, lng: number, radiusM: number, severity: string, note: string, active: boolean, createdAt: string}>>}
  */
 export async function getHazards() {
-  try {
-    await delay(150);
-    return { success: true, data: [...MOCK_HAZARDS] };
-  } catch (error) {
-    console.error("API Error getHazards:", error);
-    return { success: false, data: [], error: error.message };
-  }
+  await new Promise((r) => setTimeout(r, 60));
+  return mockStore.getHazards();
 }
 
 /**
- * Add a newly marked hazard (Admin action)
+ * 4. subscribeHazards(cb)
+ * Polling mock of in-memory store
+ * @param {(hazards: Array<any>) => void} cb
+ * @returns {() => void} unsubscribe function
  */
-export async function reportHazard(hazardData) {
-  try {
-    await delay(200);
-    const newHazard = {
-      id: `haz-${Date.now()}`,
-      severity: "high",
-      reportedAt: "Just now",
-      clearedStatus: false,
-      affectedRoutes: [],
-      ...hazardData,
-    };
-    MOCK_HAZARDS.unshift(newHazard);
-    return { success: true, data: newHazard };
-  } catch (error) {
-    console.error("API Error reportHazard:", error);
-    return { success: false, error: error.message };
-  }
+export function subscribeHazards(cb) {
+  if (typeof cb !== "function") return () => {};
+
+  // Immediate emit
+  cb(mockStore.getHazards());
+
+  const intervalId = setInterval(() => {
+    try {
+      cb(mockStore.getHazards());
+    } catch (err) {
+      console.error("[subscribeHazards] callback error:", err);
+    }
+  }, 1000);
+
+  return () => clearInterval(intervalId);
 }
 
 /**
- * Trigger QARS (Quantum-inspired Adaptive Route Swarm) optimization
- * Collapses multi-route swarm into the single best optimal path.
+ * 5. addHazard(data) & resolveHazard(id)
  */
-export async function optimizeRouteWithQARS(routeId) {
-  try {
-    await delay(600); // Simulate quantum-inspired swarm convergence computation
-    const route = MOCK_ROUTES.find((r) => r.id === routeId) || MOCK_ROUTES[0];
-    const timeSavedMin = Math.max(4, Math.round((route.currentDurationMin - route.optimizedDurationMin) * 1.1));
-    const distanceDiffKm = (route.distanceKm * 0.94).toFixed(1);
-    
-    return {
-      success: true,
-      data: {
-        routeId: route.id,
-        originalTimeMin: route.currentDurationMin,
-        optimizedTimeMin: route.optimizedDurationMin,
-        timeSavedMin,
-        distanceKm: distanceDiffKm,
-        fuelSavingsPercent: 18.4,
-        confidenceScore: 0.982,
-        swarmParticlesConverged: 128,
-        advisory: "QARS collapsed wave function: Route bypasses Kallar hairpins via Karamadai corridor.",
-      },
-    };
-  } catch (error) {
-    console.error("API Error optimizeRouteWithQARS:", error);
-    return { success: false, error: error.message };
+export async function addHazard(data) {
+  await new Promise((r) => setTimeout(r, 80));
+  const id = mockStore.addHazard(data);
+  return { ok: true, id };
+}
+
+export async function resolveHazard(id) {
+  await new Promise((r) => setTimeout(r, 80));
+  const success = mockStore.resolveHazard(id);
+  return { ok: Boolean(success) };
+}
+
+import { getRoadRoutes } from "@/lib/roadRouting";
+
+/**
+ * 6. planRoutes(from, to)
+ * Every route must come from getRoadRoutes (src/lib/roadRouting.js) using OSRM with overview=full&geometries=geojson.
+ * Remove ALL synthetic/curved/straight fallback lines. If road data fails, return empty array.
+ * @param {{lat: number, lng: number}} from
+ * @param {{lat: number, lng: number}} to
+ * @returns {Promise<{routes: Array<{id: string, coords: [number, number][], distanceM: number, durationS: number, source: string, snappedStart?: [number, number], snappedEnd?: [number, number]}>}>}
+ */
+export async function planRoutes(from, to) {
+  if (!from || !to || typeof from.lat !== "number" || typeof from.lng !== "number" || typeof to.lat !== "number" || typeof to.lng !== "number") {
+    return { routes: [] };
   }
+
+  const routes = await getRoadRoutes(from, to, { alternatives: true });
+  return { routes: routes || [] };
+}
+
+
+/**
+ * 7. runQars({from, to, routes, hazards, priority})
+ * MOCK: wait 1.2 s, pick the route with the fewest hazards near it, fake a decreasing convergence array of 40 numbers.
+ * @returns {Promise<{best: object, candidates: Array<object>, baselineDelayMin: number, bestDelayMin: number, timeSavedMin: number, convergence: number[]}>}
+ */
+export async function runQars({ from, to, routes, hazards = [], priority = "normal" }) {
+  // Wait 1.2 s
+  await new Promise((r) => setTimeout(r, 1200));
+
+  if (!Array.isArray(routes) || routes.length === 0) {
+    return {
+      best: null,
+      candidates: [],
+      baselineDelayMin: 0,
+      bestDelayMin: 0,
+      timeSavedMin: 0,
+      convergence: [],
+    };
+  }
+
+  const activeHazards = (hazards || []).filter((h) => h.active !== false);
+
+  // Evaluate candidate routes
+  const candidates = routes.map((route, idx) => {
+    const hits = [];
+    for (const h of activeHazards) {
+      const hLat = h.lat ?? h.location?.lat;
+      const hLng = h.lng ?? h.location?.lng;
+      if (typeof hLat === "number" && typeof hLng === "number") {
+        const d = minDistanceToPolylineMeters({ lat: hLat, lng: hLng }, route.coords);
+        const threshold = (h.radiusM || 350) + 150;
+        if (d <= threshold) {
+          hits.push({
+            hazardId: h.id,
+            type: h.type,
+            distanceToRouteM: d,
+            severity: h.severity,
+            note: h.note,
+          });
+        }
+      }
+    }
+
+    // Cost function: base time + penalty per hazard hit (higher penalty for medical/food)
+    const hazardPenaltyPerHit = priority === "medical" ? 1800 : priority === "food" ? 1200 : 900;
+    const cost = Math.round(route.durationS + hits.length * hazardPenaltyPerHit);
+
+    return {
+      ...route,
+      cost,
+      hits,
+    };
+  });
+
+  // Pick the route with fewest hazard hits, then lowest cost / shortest duration
+  let best = candidates[0];
+  for (let i = 1; i < candidates.length; i++) {
+    const cand = candidates[i];
+    if (cand.hits.length < best.hits.length) {
+      best = cand;
+    } else if (cand.hits.length === best.hits.length && cand.cost < best.cost) {
+      best = cand;
+    }
+  }
+
+  // Calculate delays and savings
+  const maxHits = Math.max(...candidates.map((c) => c.hits.length), 0);
+  const bestHits = best.hits.length;
+
+  const baselineDelayMin = Math.max(8, maxHits * 12 + 8);
+  const bestDelayMin = bestHits * 3;
+  const timeSavedMin = Math.max(5, baselineDelayMin - bestDelayMin);
+
+  // Fake a decreasing convergence array of 40 numbers
+  const convergence = [];
+  let currentVal = 48.0 + Math.random() * 4.0;
+  for (let i = 0; i < 40; i++) {
+    const decay = (currentVal - 11.5) * 0.11;
+    const jitter = (Math.random() - 0.5) * 0.35;
+    currentVal = Math.max(11.2, currentVal - decay + jitter);
+    convergence.push(Number(currentVal.toFixed(2)));
+  }
+
+  return {
+    best,
+    candidates,
+    baselineDelayMin,
+    bestDelayMin,
+    timeSavedMin,
+    convergence,
+  };
 }
 
 /**
- * Dispatch customer SMS update with transparent delay reason and assured ETA
+ * 8. getAdvisory({hazardsOnRoute, rain, lang})
+ * Mock template lines in correct English and Tamil
+ * @returns {Promise<{en: [string, string], ta: [string, string]}>}
  */
-export async function sendCustomerSMS(notificationPayload) {
-  try {
-    await delay(250);
-    return {
-      success: true,
-      data: {
-        messageId: `sms-${Date.now()}`,
-        sentAt: new Date().toISOString(),
-        recipient: notificationPayload.recipient || "+91 99940 *****",
-        status: "delivered",
-        content: notificationPayload.message || "KovaiSwift: Your delivery has been rerouted due to localized hazard. Updated assured ETA: 18 mins.",
-      },
-    };
-  } catch (error) {
-    console.error("API Error sendCustomerSMS:", error);
-    return { success: false, error: error.message };
+export async function getAdvisory({ hazardsOnRoute = [], rain = false, lang = "en" }) {
+  await new Promise((r) => setTimeout(r, 40));
+
+  const hasHazards = Array.isArray(hazardsOnRoute) && hazardsOnRoute.length > 0;
+  const firstHazard = hasHazards ? hazardsOnRoute[0] : null;
+
+  let enLine1 = "Route corridor confirmed. Safe transit conditions reported across city arterials.";
+  let enLine2 = "Maintain regular cruising speed and monitor battery and load telemetry.";
+
+  let taLine1 = "பாதை உறுதிப்படுத்தப்பட்டது. நகர்ப்புற வழித்தடங்களில் சீரான போக்குவரத்து உள்ளது.";
+  let taLine2 = "வழக்கமான வேகத்தில் செல்லவும்; பேட்டரி மற்றும் சரக்கு நிலையை கண்காணிக்கவும்.";
+
+  if (firstHazard) {
+    const type = firstHazard.type || "hazard";
+    if (type === "landslide") {
+      enLine1 = "CAUTION: Landslide risk active along Kallar–Ghat hairpins. Speed restricted to 25 km/h.";
+      enLine2 = "QARS bypass engaged via scenic outer loop to protect temperature-controlled cargo.";
+      taLine1 = "எச்சரிக்கை: கல்லார் கொண்டை ஊசி வளைவுகளில் மண் சரிவு அபாயம். வேகம் 25 கி.மீ ஆக குறைக்கவும்.";
+      taLine2 = "பாதுகாப்பான வெளிவட்ட மாற்றுப்பாதை இயக்கப்பட்டது; சரக்கு பாதுகாப்பு உறுதி செய்யப்பட்டது.";
+    } else if (type === "accident") {
+      enLine1 = "TRAFFIC NOTICE: Multi-vehicle congestion detected ahead on main arterial corridor.";
+      enLine2 = "QARS has computed optimal detour around incident. ETA impact minimized to under 3 mins.";
+      taLine1 = "போக்குவரத்து அறிவிப்பு: பிரதான சாலையில் வாகன நெரிசல் கண்டறியப்பட்டுள்ளது.";
+      taLine2 = "மாற்றுப்பாதை தேர்ந்தெடுக்கப்பட்டது. தாமதம் 3 நிமிடங்களுக்குள் கட்டுப்படுத்தப்பட்டுள்ளது.";
+    } else if (type === "roadblock") {
+      enLine1 = "ROAD CLOSURE: Civic utility repair blocking junction ahead. Road pass suspended.";
+      enLine2 = "Follow the highlighted green bypass route to smoothly navigate past junction.";
+      taLine1 = "சாலை அடைப்பு: சந்திப்பில் பராமரிப்பு பணி நடைபெறுகிறது. பிரதான பாதை மூடப்பட்டுள்ளது.";
+      taLine2 = "பச்சை நிற மாற்றுப்பாதையைப் பின்பற்றி தடையின்றி இலக்கை அடையவும்.";
+    } else if (type === "rain" || rain) {
+      enLine1 = "WEATHER ADVISORY: Waterlogging and monsoon showers reported near flyover underpass.";
+      enLine2 = "Elevated bypass selected. Drive with low beams and maintain safe braking distance.";
+      taLine1 = "வானிலை எச்சரிக்கை: மேம்பால சுரங்கப்பாதையில் மழைநீர் தேக்கம் ஏற்பட்டுள்ளது.";
+      taLine2 = "உயர்மட்ட மாற்றுப்பாதை தேர்வு செய்யப்பட்டுள்ளது. போதிய இடைவெளியுடன் கவனமாக ஓட்டவும்.";
+    } else {
+      enLine1 = "INCIDENT AHEAD: Active hazard within corridor perimeter. Caution required.";
+      enLine2 = "QARS quantum swarm has recalculated safe clearance route around the disturbance.";
+      taLine1 = "முன்னே தடை: வழித்தடத்தில் இடையூறு உள்ளது. கவனத்துடன் வாகனத்தை இயக்கவும்.";
+      taLine2 = "QARS நெறிமுறை பாதுகாப்பான புதிய பாதையை கணித்துள்ளது.";
+    }
+  } else if (rain) {
+    enLine1 = "WEATHER ADVISORY: Moderate rainfall in Coimbatore basin. Wet road grip reduction.";
+    enLine2 = "Braking distance increased by 30%. Drive smoothly and maintain safe stopping gap.";
+    taLine1 = "வானிலை தகவல்: கோவையில் மிதமான மழை. சாலை வழுக்கும் வாய்ப்பு உள்ளது.";
+    taLine2 = "வேகத்தைக் குறைத்து, மற்ற வாகனங்களுடன் பாதுகாப்பான இடைவெளியை பராமரிக்கவும்.";
   }
+
+  return {
+    en: [enLine1, enLine2],
+    ta: [taLine1, taLine2],
+  };
 }
 
 /**
- * Get overall system metrics for mission-control stat cards
+ * 9. updateLiveLocation(profile, {lat,lng,heading,status,destination})
+ * subscribeLiveLocations(cb)
  */
-export async function getSystemMetrics() {
-  try {
-    await delay(120);
-    return {
-      success: true,
-      data: {
-        activeDrivers: 24,
-        onTimeRate: 96.4,
-        activeHazards: 3,
-        emergencyPriorityLoads: 5,
-        totalTimeSavedTodayMin: 342,
-        fuelConservedLitres: 78.5,
-      },
-    };
-  } catch (error) {
-    console.error("API Error getSystemMetrics:", error);
-    return {
-      success: false,
-      data: {
-        activeDrivers: 24,
-        onTimeRate: 96.4,
-        activeHazards: 3,
-        emergencyPriorityLoads: 5,
-        totalTimeSavedTodayMin: 342,
-        fuelConservedLitres: 78.5,
-      },
-    };
-  }
+export async function updateLiveLocation(profile, loc) {
+  if (!profile || !loc) return { ok: false };
+  mockStore.updateLiveLocation(profile, loc);
+  return { ok: true };
+}
+
+export function subscribeLiveLocations(cb) {
+  if (typeof cb !== "function") return () => {};
+
+  cb(mockStore.getLiveLocations());
+
+  const intervalId = setInterval(() => {
+    try {
+      cb(mockStore.getLiveLocations());
+    } catch (err) {
+      console.error("[subscribeLiveLocations] callback error:", err);
+    }
+  }, 1000);
+
+  return () => clearInterval(intervalId);
+}
+
+/**
+ * 10. sendMessage(fromUid, toUid, text)
+ * subscribeMessages(uid, cb)
+ */
+export async function sendMessage(fromUid, toUid, text) {
+  await new Promise((r) => setTimeout(r, 40));
+  mockStore.addMessage(fromUid, toUid, text);
+  return { ok: true };
+}
+
+export function subscribeMessages(uid, cb) {
+  if (typeof cb !== "function") return () => {};
+
+  cb(mockStore.getMessages(uid));
+
+  const intervalId = setInterval(() => {
+    try {
+      cb(mockStore.getMessages(uid));
+    } catch (err) {
+      console.error("[subscribeMessages] callback error:", err);
+    }
+  }, 1000);
+
+  return () => clearInterval(intervalId);
+}
+
+/**
+ * 11. sendCustomerSms({to, body, deliveryCode})
+ * Mock: wait 800 ms
+ */
+export async function sendCustomerSms({ to, body, deliveryCode }) {
+  await new Promise((r) => setTimeout(r, 800));
+  const sid = `SM_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  return { ok: true, sid };
 }
