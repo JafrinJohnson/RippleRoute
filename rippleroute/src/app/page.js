@@ -1,6 +1,9 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
+import dynamic from "next/dynamic";
+import Link from "next/link";
+import { motion } from "framer-motion";
 import Navbar from "@/components/layout/Navbar";
 import {
   GlassCard,
@@ -8,23 +11,9 @@ import {
   Badge,
   Input,
   Select,
-  PasswordInput,
-  Tabs,
-  Modal,
-  Drawer,
-  Skeleton,
-  Avatar,
-  StatCard,
   useToast,
 } from "@/components/ui";
 import { useLanguage } from "@/context/LanguageContext";
-import { useAuth } from "@/context/AuthContext";
-import {
-  getSystemMetrics,
-  optimizeRouteWithQARS,
-  sendCustomerSMS,
-  getHazards,
-} from "@/services/api";
 import {
   Zap,
   ShieldAlert,
@@ -32,742 +21,1154 @@ import {
   Clock,
   Compass,
   AlertTriangle,
-  Flame,
   CheckCircle,
   Radio,
   Send,
-  Sliders,
   Layers,
   MapPin,
   Sparkles,
-  RefreshCw,
-  Bell,
   HeartPulse,
+  ArrowRight,
+  MessageSquare,
+  Globe,
+  Sliders,
+  Check,
+  ChevronRight,
+  Phone,
+  Mail,
+  Building,
+  Activity,
+  Flame,
 } from "lucide-react";
 
-export default function HomePage() {
+// Dynamically load the 3D Delivery Truck Scene with SSR disabled per rules
+const DeliveryTruckScene = dynamic(
+  () => import("@/components/3d/DeliveryTruckScene"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="w-full h-[400px] sm:h-[460px] lg:h-[520px] flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-muted">
+          <div className="w-12 h-12 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+          <span className="text-xs font-semibold tracking-wider uppercase">
+            Initializing 3D Simulation...
+          </span>
+        </div>
+      </div>
+    ),
+  }
+);
+
+// Motion reveal animation helpers
+const fadeInUp = {
+  initial: { opacity: 0, y: 24 },
+  whileInView: { opacity: 1, y: 0 },
+  viewport: { once: true, margin: "-50px" },
+  transition: { duration: 0.5, ease: "easeOut" },
+};
+
+export default function LandingPage() {
   const { t, isTamil } = useLanguage();
-  const { role, switchRole } = useAuth();
   const { toast } = useToast();
 
-  // Component test states
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const [isQarsLoading, setIsQarsLoading] = useState(false);
-  const [qarsResult, setQarsResult] = useState(null);
-  const [isSmsLoading, setIsSmsLoading] = useState(false);
+  // Contact form client states
+  const [contactName, setContactName] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [contactRole, setContactRole] = useState("admin");
+  const [contactMessage, setContactMessage] = useState("");
+  const [contactLoading, setContactLoading] = useState(false);
 
-  // Form input states
-  const [testEmail, setTestEmail] = useState("dispatcher@kovaiswift.com");
-  const [testPassword, setTestPassword] = useState("KovaiSwift#2026");
-  const [testRole, setTestRole] = useState("admin");
+  const handleContactSubmit = (e) => {
+    e.preventDefault();
+    setContactLoading(true);
 
-  // Telemetry metrics from api.js
-  const [metrics, setMetrics] = useState({
-    activeDrivers: 24,
-    onTimeRate: 96.4,
-    activeHazards: 3,
-    emergencyPriorityLoads: 5,
-    totalTimeSavedTodayMin: 342,
-  });
-
-  // Fetch metrics safely on mount
-  useEffect(() => {
-    let isMounted = true;
-    async function loadData() {
-      try {
-        const res = await getSystemMetrics();
-        if (res.success && isMounted) {
-          setMetrics(res.data);
-        }
-      } catch (err) {
-        console.warn("Failed fetching initial metrics:", err);
-      }
-    }
-    loadData();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  // Handle QARS Swarm Optimization
-  const handleOptimizeQars = async () => {
-    setIsQarsLoading(true);
-    try {
-      const res = await optimizeRouteWithQARS("route-02");
-      if (res.success) {
-        setQarsResult(res.data);
-        toast({
-          type: "success",
-          title: t("qars_optimized_success"),
-          description: `${t("qars_time_saved")}: ${res.data.timeSavedMin} mins saved via Karamadai corridor bypass.`,
-          duration: 5000,
-          action: {
-            label: "Inspect Swarm",
-            onClick: () => setIsDrawerOpen(true),
-          },
-        });
-      }
-    } catch (err) {
+    setTimeout(() => {
+      setContactLoading(false);
       toast({
-        type: "danger",
-        title: "QARS Optimization Failed",
-        description: err.message,
+        type: "success",
+        title: t("contact_toast_success_title"),
+        description: t("contact_toast_success_desc"),
+        duration: 5000,
       });
-    } finally {
-      setIsQarsLoading(false);
-    }
+      setContactName("");
+      setContactEmail("");
+      setContactMessage("");
+    }, 600);
   };
-
-  // Handle Customer SMS dispatch simulation
-  const handleSendSMS = async () => {
-    setIsSmsLoading(true);
-    try {
-      const res = await sendCustomerSMS({
-        recipient: "+91 99940 12890",
-        message: t("sms_sample_message"),
-      });
-      if (res.success) {
-        toast({
-          type: "info",
-          title: t("sms_sent_success"),
-          description: res.data.content,
-          duration: 4000,
-        });
-      }
-    } catch (err) {
-      toast({
-        type: "danger",
-        title: "SMS Dispatch Error",
-        description: err.message,
-      });
-    } finally {
-      setIsSmsLoading(false);
-    }
-  };
-
-  // Tabs Definition
-  const showcaseTabs = [
-    {
-      id: "cockpit",
-      label: "Mission Cockpit",
-      icon: Compass,
-      badge: "LIVE",
-      content: (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <GlassCard padding="p-5" className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-muted uppercase tracking-wider">
-                Active Ghat Section Telemetry
-              </span>
-              <Badge variant="emergency" pulse size="sm">
-                CRITICAL
-              </Badge>
-            </div>
-            <h4 className="text-base font-bold font-heading text-text">
-              {t("hazard_ghat_advisory")}
-            </h4>
-            <p className="text-xs text-muted leading-relaxed">
-              Active rockfall near KM 14 hairpin turns. Fleet #2 carrying refrigerated medical oxygen automatically switched to QPSO swarm bypass.
-            </p>
-            <div className="flex items-center gap-2 pt-2">
-              <Button
-                variant="primary"
-                size="sm"
-                icon={Zap}
-                loading={isQarsLoading}
-                onClick={handleOptimizeQars}
-              >
-                {t("qars_btn_optimize")}
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                icon={Send}
-                loading={isSmsLoading}
-                onClick={handleSendSMS}
-              >
-                {t("btn_notify_customer")}
-              </Button>
-            </div>
-          </GlassCard>
-
-          <GlassCard padding="p-5" className="flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-muted uppercase tracking-wider">
-                Fleet Distribution Hub
-              </span>
-              <Badge variant="safe" size="sm">
-                98.2% HEALTH
-              </Badge>
-            </div>
-            <h4 className="text-base font-bold font-heading text-text">
-              {t("depot_name")}
-            </h4>
-            <div className="flex items-center gap-3">
-              <Avatar name="Karthik Raja" status="online" size="md" />
-              <div>
-                <p className="text-xs font-bold text-text">TN-37-BY-4512 (EV Van)</p>
-                <p className="text-[11px] text-muted">Peelamedu to Gandhipuram • ETA 14m</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Avatar name="Praveen Kumar" status="emergency" size="md" />
-              <div>
-                <p className="text-xs font-bold text-pink">TN-38-AL-9014 (Medical)</p>
-                <p className="text-[11px] text-muted">Short-lifespan Oxygen • 3.5 hrs reserve</p>
-              </div>
-            </div>
-          </GlassCard>
-        </div>
-      ),
-    },
-    {
-      id: "swarm",
-      label: "QARS Swarm Engine",
-      icon: Zap,
-      badge: "QPSO",
-      content: (
-        <GlassCard padding="p-6">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div>
-              <h4 className="text-base font-bold font-heading text-text">
-                {t("qars_title")}
-              </h4>
-              <p className="text-xs text-muted mt-1 max-w-xl">
-                {t("qars_fullname")} evaluates 128 dynamic swarm fitness trajectories across Coimbatore arterial roads, factoring in precipitation, grade resistance, and live roadblock reports.
-              </p>
-            </div>
-            <Button
-              variant="cyan"
-              size="sm"
-              icon={Sparkles}
-              loading={isQarsLoading}
-              onClick={handleOptimizeQars}
-            >
-              {t("qars_btn_optimize")}
-            </Button>
-          </div>
-
-          {qarsResult ? (
-            <div className="mt-4 p-4 rounded-xl bg-glass border border-cyan/30 shadow-glow-cyan animate-in fade-in">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-                <div>
-                  <span className="text-[10px] text-muted uppercase">Original ETA</span>
-                  <p className="text-lg font-bold text-text">{qarsResult.originalTimeMin} mins</p>
-                </div>
-                <div>
-                  <span className="text-[10px] text-muted uppercase">QARS ETA</span>
-                  <p className="text-lg font-bold text-cyan">{qarsResult.optimizedTimeMin} mins</p>
-                </div>
-                <div>
-                  <span className="text-[10px] text-muted uppercase">{t("qars_time_saved")}</span>
-                  <p className="text-lg font-bold text-safe">+{qarsResult.timeSavedMin} mins</p>
-                </div>
-                <div>
-                  <span className="text-[10px] text-muted uppercase">Fuel Conserved</span>
-                  <p className="text-lg font-bold text-primary">{qarsResult.fuelSavingsPercent}%</p>
-                </div>
-              </div>
-              <p className="text-xs text-muted mt-3 pt-3 border-t border-glass-border">
-                {qarsResult.advisory}
-              </p>
-            </div>
-          ) : (
-            <div className="mt-4 p-4 rounded-xl bg-glass border border-glass-border text-center text-xs text-muted">
-              Click &quot;{t("qars_btn_optimize")}&quot; to simulate instant quantum-inspired particle swarm convergence.
-            </div>
-          )}
-        </GlassCard>
-      ),
-    },
-    {
-      id: "hazards",
-      label: "Hazards & AI Advisories",
-      icon: ShieldAlert,
-      badge: "3",
-      content: (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <GlassCard padding="p-4" className="border-danger/30 shadow-glow-danger">
-            <div className="flex items-center justify-between mb-2">
-              <Badge variant="danger" size="sm" pulse>
-                {t("hazard_landslide")}
-              </Badge>
-              <span className="text-[10px] text-muted">10m ago</span>
-            </div>
-            <h5 className="text-xs font-bold text-text">Mettupalayam Ghat KM 14</h5>
-            <p className="text-[11px] text-muted mt-1">
-              Active rockfall. Ghat pass closed for heavy trucks. Diverted via Annur–Karamadai.
-            </p>
-          </GlassCard>
-
-          <GlassCard padding="p-4" className="border-warn/30 shadow-glow-warn">
-            <div className="flex items-center justify-between mb-2">
-              <Badge variant="warn" size="sm">
-                {t("hazard_accident")}
-              </Badge>
-              <span className="text-[10px] text-muted">25m ago</span>
-            </div>
-            <h5 className="text-xs font-bold text-text">Avinashi Road Flyover</h5>
-            <p className="text-[11px] text-muted mt-1">
-              West-bound lane pileup. Moderate delay of 18 minutes expected.
-            </p>
-          </GlassCard>
-
-          <GlassCard padding="p-4" className="border-cyan/30 shadow-glow-cyan">
-            <div className="flex items-center justify-between mb-2">
-              <Badge variant="info" size="sm">
-                {t("hazard_rain")}
-              </Badge>
-              <span className="text-[10px] text-muted">40m ago</span>
-            </div>
-            <h5 className="text-xs font-bold text-text">Lanka Corner Underpass</h5>
-            <p className="text-[11px] text-muted mt-1">
-              Waterlogging under bridge. Diverted via Town Hall arterial.
-            </p>
-          </GlassCard>
-        </div>
-      ),
-    },
-  ];
 
   return (
-    <div className="min-h-screen flex flex-col">
+    <div className="min-h-screen flex flex-col overflow-x-hidden selection:bg-primary/30 selection:text-white">
       {/* Sticky Glass Navbar */}
-      <Navbar
-        onOpenAuthModal={(mode) => {
-          setIsModalOpen(true);
-        }}
-        onQuickAction={() => setIsDrawerOpen(true)}
-      />
+      <Navbar />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-12">
+      <main className="flex-1 w-full space-y-24 sm:space-y-32 pb-20">
         
         {/* ====================================================================
-            HERO SECTION
+            1. HERO SECTION (Full Viewport)
             ==================================================================== */}
-        <section className="relative text-center max-w-4xl mx-auto space-y-5 pt-4 sm:pt-8">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-glass border border-glass-border backdrop-blur-md">
-            <Radio className="w-3.5 h-3.5 text-safe animate-pulse" />
-            <span className="text-xs font-semibold tracking-wide text-text">
-              KovaiSwift Logistics Telemetry Grid Active
-            </span>
-            <Badge variant="info" size="sm">
-              Coimbatore, TN
-            </Badge>
-          </div>
-
-          <h1 className="text-4xl sm:text-6xl font-black font-heading tracking-tight text-text leading-tight">
-            Disruption-Aware{" "}
-            <span className="bg-gradient-to-r from-primary via-cyan to-pink bg-clip-text text-transparent">
-              Logistics Control
-            </span>
-          </h1>
-
-          <p className="text-sm sm:text-lg text-muted max-w-2xl mx-auto leading-relaxed">
-            {t("subtagline")}. Answering three questions continuously:{" "}
-            <span className="text-text font-semibold">What changed?</span>{" "}
-            <span className="text-text font-semibold">What is affected?</span>{" "}
-            <span className="text-primary font-semibold">What should we do next?</span>
-          </p>
-
-          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
-            <Button
-              variant="primary"
-              size="lg"
-              icon={Zap}
-              loading={isQarsLoading}
-              onClick={handleOptimizeQars}
-            >
-              {t("qars_btn_optimize")}
-            </Button>
-            <Button
-              variant="secondary"
-              size="lg"
-              icon={Sliders}
-              onClick={() => setIsDrawerOpen(true)}
-            >
-              Open Fleet Drawer
-            </Button>
-            <Button
-              variant="ghost"
-              size="lg"
-              onClick={() => setIsModalOpen(true)}
-            >
-              Open Mission Modal
-            </Button>
-          </div>
-        </section>
-
-        {/* ====================================================================
-            STAT CARDS (Animated Counting Numbers)
-            ==================================================================== */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg sm:text-xl font-bold font-heading text-text flex items-center gap-2">
-              <Compass className="w-5 h-5 text-primary" />
-              <span>Real-Time Fleet Telemetry (StatCard Showcase)</span>
-            </h2>
-            <Badge variant="safe" pulse size="sm">
-              LIVE STREAM
-            </Badge>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-            <StatCard
-              title={t("stat_active_fleet")}
-              value={metrics.activeDrivers}
-              suffix=" Vans"
-              trend={8.5}
-              trendLabel="vs yesterday"
-              icon={Truck}
-              variant="primary"
-            />
-            <StatCard
-              title={t("stat_on_time_rate")}
-              value={metrics.onTimeRate}
-              suffix="%"
-              decimals={1}
-              trend={2.4}
-              trendLabel="high SLA"
-              icon={CheckCircle}
-              variant="safe"
-            />
-            <StatCard
-              title={t("stat_active_hazards")}
-              value={metrics.activeHazards}
-              suffix=" Alerts"
-              trend={-12.0}
-              trendLabel="clearing"
-              icon={AlertTriangle}
-              variant="warn"
-            />
-            <StatCard
-              title={t("stat_emergency_loads")}
-              value={metrics.emergencyPriorityLoads}
-              suffix=" Med/O2"
-              trend={15.0}
-              trendLabel="high priority"
-              icon={HeartPulse}
-              variant="pink"
-            />
-            <StatCard
-              title={t("stat_total_time_saved")}
-              value={metrics.totalTimeSavedTodayMin}
-              suffix=" min"
-              trend={22.5}
-              trendLabel="via QARS"
-              icon={Clock}
-              variant="cyan"
-            />
-          </div>
-        </section>
-
-        {/* ====================================================================
-            TABS COMPONENT SHOWCASE
-            ==================================================================== */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg sm:text-xl font-bold font-heading text-text flex items-center gap-2">
-              <Layers className="w-5 h-5 text-cyan" />
-              <span>Operational Modules (Tabs Showcase)</span>
-            </h2>
-          </div>
-
-          <Tabs tabs={showcaseTabs} />
-        </section>
-
-        {/* ====================================================================
-            UI KIT SHOWCASE: Buttons, Badges, Inputs, Avatars, Skeletons
-            ==================================================================== */}
-        <section className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg sm:text-xl font-bold font-heading text-text flex items-center gap-2">
-              <Sliders className="w-5 h-5 text-pink" />
-              <span>Complete UI Kit Component Gallery</span>
-            </h2>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <section
+          id="hero"
+          className="relative min-h-[calc(100vh-5rem)] flex items-center justify-center px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full pt-4 sm:pt-8"
+        >
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-center w-full">
             
-            {/* Left Card: Buttons & Badges */}
-            <GlassCard padding="p-6" className="space-y-6">
-              <div>
-                <h3 className="text-sm font-bold uppercase tracking-wider text-muted mb-3">
-                  Button Variants & Micro-Interactions
-                </h3>
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <Button variant="primary">Primary (Glow)</Button>
-                  <Button variant="cyan">Cyan Accent</Button>
-                  <Button variant="secondary">Secondary Glass</Button>
-                  <Button variant="danger">Danger</Button>
-                  <Button variant="ghost">Ghost</Button>
-                  <Button variant="outline">Outline</Button>
-                  <Button variant="primary" loading>
-                    Loading
-                  </Button>
-                  <Button variant="primary" icon={Bell} size="icon" aria-label="Notifications" />
-                </div>
+            {/* Left Content (7 Cols) */}
+            <motion.div
+              initial={{ opacity: 0, x: -30 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: 0.6, ease: "easeOut" }}
+              className="lg:col-span-6 xl:col-span-7 flex flex-col items-start gap-6 text-left"
+            >
+              {/* Region Pill */}
+              <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-glass border border-glass-border backdrop-blur-md shadow-sm">
+                <span className="w-2 h-2 rounded-full bg-safe animate-pulse" />
+                <span className="text-xs font-semibold text-text tracking-wide">
+                  {t("hero_pill")}
+                </span>
+                <span className="text-[10px] uppercase font-bold text-primary px-1.5 py-0.5 rounded bg-primary/10 border border-primary/25">
+                  KovaiSwift
+                </span>
               </div>
 
-              <div>
-                <h3 className="text-sm font-bold uppercase tracking-wider text-muted mb-3">
-                  Badge Variants (Status & Priority)
-                </h3>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="safe" pulse>Safe (Pulsing)</Badge>
-                  <Badge variant="warn">Warning</Badge>
-                  <Badge variant="danger">Danger</Badge>
-                  <Badge variant="info">Info</Badge>
-                  <Badge variant="emergency" pulse>Emergency Medical</Badge>
-                  <Badge variant="neutral">Neutral</Badge>
-                </div>
+              {/* Headline */}
+              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black font-heading tracking-tight text-text leading-[1.12]">
+                {t("hero_headline_1")}{" "}
+                <span className="bg-gradient-to-r from-primary via-cyan to-pink bg-clip-text text-transparent">
+                  {t("hero_headline_2")}
+                </span>
+              </h1>
+
+              {/* Sub-Text */}
+              <p className="text-base sm:text-lg text-muted max-w-xl leading-relaxed">
+                {t("hero_subtext")}
+              </p>
+
+              {/* CTA Buttons */}
+              <div className="flex flex-wrap items-center gap-3.5 pt-2 w-full sm:w-auto">
+                <Link href="/signup">
+                  <Button
+                    variant="primary"
+                    size="lg"
+                    iconRight={ArrowRight}
+                    className="w-full sm:w-auto shadow-glow"
+                  >
+                    {t("hero_btn_get_started")}
+                  </Button>
+                </Link>
+
+                <a href="#how-it-works">
+                  <Button
+                    variant="secondary"
+                    size="lg"
+                    icon={Compass}
+                    className="w-full sm:w-auto"
+                  >
+                    {t("hero_btn_how_it_works")}
+                  </Button>
+                </a>
               </div>
 
-              <div>
-                <h3 className="text-sm font-bold uppercase tracking-wider text-muted mb-3">
-                  Toast System Controls (Stacks Bottom-Left)
-                </h3>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() =>
-                      toast({
-                        type: "success",
-                        title: "Mission Completed",
-                        description: "Medical oxygen delivery verified at Mettupalayam GH.",
-                      })
-                    }
-                  >
-                    Success Toast
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() =>
-                      toast({
-                        type: "warn",
-                        title: t("hazard_accident"),
-                        description: "Avinashi Road west-bound slowed by 15 mins.",
-                      })
-                    }
-                  >
-                    Warn Toast
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() =>
-                      toast({
-                        type: "danger",
-                        title: t("hazard_landslide"),
-                        description: "Kallar Ghat Pass hairpin 3 blocked.",
-                      })
-                    }
-                  >
-                    Danger Toast
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() =>
-                      toast({
-                        type: "emergency",
-                        title: "High Priority Cargo Alert",
-                        description: "Antivenom delivery rerouted to KMCH Coimbatore.",
-                        action: {
-                          label: "View Telemetry",
-                          onClick: () => setIsDrawerOpen(true),
-                        },
-                      })
-                    }
-                  >
-                    Emergency Toast
-                  </Button>
+              {/* Operational Proof Metric Strip */}
+              <div className="grid grid-cols-3 gap-4 pt-4 border-t border-glass-border w-full max-w-lg">
+                <div>
+                  <span className="text-xl sm:text-2xl font-black font-heading text-text">
+                    &lt; 2s
+                  </span>
+                  <p className="text-[11px] text-muted">Hazard Broadcast</p>
+                </div>
+                <div>
+                  <span className="text-xl sm:text-2xl font-black font-heading text-cyan">
+                    128
+                  </span>
+                  <p className="text-[11px] text-muted">QPSO Swarm Vectors</p>
+                </div>
+                <div>
+                  <span className="text-xl sm:text-2xl font-black font-heading text-safe">
+                    100%
+                  </span>
+                  <p className="text-[11px] text-muted">Direct SMS Delivery</p>
+                </div>
+              </div>
+            </motion.div>
+
+            {/* Right 3D Scene with Floating Glass Chips (5 Cols) */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.7, delay: 0.2 }}
+              className="lg:col-span-6 xl:col-span-5 relative w-full flex items-center justify-center"
+            >
+              {/* Outer decorative ambient glow aura */}
+              <div className="absolute inset-0 bg-gradient-to-tr from-primary/20 via-cyan/15 to-transparent rounded-full filter blur-3xl pointer-events-none -z-10" />
+
+              {/* 3D Canvas Container */}
+              <div className="w-full relative rounded-3xl bg-glass/40 border border-glass-border shadow-2xl backdrop-blur-sm overflow-hidden">
+                <DeliveryTruckScene />
+
+                {/* Floating Glass Chip 1 (Top Left) */}
+                <motion.div
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.8, duration: 0.4 }}
+                  className="absolute top-4 left-4 z-20 pointer-events-auto"
+                >
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-bg-2/85 backdrop-blur-xl border border-glass-border shadow-lg">
+                    <Zap className="w-3.5 h-3.5 text-warn shrink-0" />
+                    <span className="text-xs font-semibold text-text whitespace-nowrap">
+                      {t("hero_chip_hazards")}
+                    </span>
+                  </div>
+                </motion.div>
+
+                {/* Floating Glass Chip 2 (Bottom Right) */}
+                <motion.div
+                  initial={{ opacity: 0, y: -12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 1.0, duration: 0.4 }}
+                  className="absolute bottom-5 right-4 z-20 pointer-events-auto"
+                >
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-bg-2/85 backdrop-blur-xl border border-glass-border shadow-lg">
+                    <Sparkles className="w-3.5 h-3.5 text-cyan shrink-0 animate-pulse" />
+                    <span className="text-xs font-semibold text-text whitespace-nowrap">
+                      {t("hero_chip_qpso")}
+                    </span>
+                  </div>
+                </motion.div>
+
+                {/* Floating Glass Chip 3 (Bottom Left) */}
+                <motion.div
+                  initial={{ opacity: 0, x: -12 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: 1.2, duration: 0.4 }}
+                  className="absolute bottom-5 left-4 z-20 pointer-events-auto hidden sm:block"
+                >
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-bg-2/85 backdrop-blur-xl border border-glass-border shadow-lg">
+                    <MessageSquare className="w-3.5 h-3.5 text-primary shrink-0" />
+                    <span className="text-xs font-semibold text-text whitespace-nowrap">
+                      {t("hero_chip_sms")}
+                    </span>
+                  </div>
+                </motion.div>
+              </div>
+            </motion.div>
+
+          </div>
+        </section>
+
+        {/* ====================================================================
+            2. ABOUT SECTION (Crisp 3 lines)
+            ==================================================================== */}
+        <section id="about" className="px-4 sm:px-6 lg:px-8 max-w-5xl mx-auto w-full">
+          <motion.div {...fadeInUp}>
+            <GlassCard
+              padding="p-8 sm:p-10"
+              className="relative overflow-hidden border-primary/30 shadow-glow"
+            >
+              {/* Decorative background watermark */}
+              <div className="absolute right-0 bottom-0 opacity-5 pointer-events-none transform translate-x-8 translate-y-8">
+                <Truck className="w-72 h-72 text-primary" />
+              </div>
+
+              <div className="relative z-10 flex flex-col gap-6">
+                <div className="flex items-center gap-2">
+                  <Badge variant="info" size="sm">
+                    {t("about_badge")}
+                  </Badge>
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted">
+                    {t("company_name")}
+                  </span>
+                </div>
+
+                <h2 className="text-2xl sm:text-3xl font-extrabold font-heading text-text">
+                  {t("about_title")}
+                </h2>
+
+                <div className="space-y-3.5 text-sm sm:text-base text-muted leading-relaxed">
+                  <p className="text-text font-medium border-l-2 border-primary pl-4">
+                    {t("about_line_1")}
+                  </p>
+                  <p className="border-l-2 border-cyan pl-4">
+                    {t("about_line_2")}
+                  </p>
+                  <p className="border-l-2 border-pink pl-4">
+                    {t("about_line_3")}
+                  </p>
                 </div>
               </div>
             </GlassCard>
+          </motion.div>
+        </section>
 
-            {/* Right Card: Inputs, Selects, Avatars & Skeletons */}
-            <GlassCard padding="p-6" className="space-y-6">
-              <h3 className="text-sm font-bold uppercase tracking-wider text-muted">
-                Form Inputs & Glass Controls
-              </h3>
+        {/* ====================================================================
+            3. THE 3 QUESTIONS SECTION
+            ==================================================================== */}
+        <section className="px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+          <motion.div {...fadeInUp} className="text-center max-w-3xl mx-auto mb-12 space-y-3">
+            <Badge variant="safe" size="sm">
+              {t("questions_badge")}
+            </Badge>
+            <h2 className="text-3xl sm:text-4xl font-extrabold font-heading text-text">
+              {t("questions_title")}
+            </h2>
+            <p className="text-sm sm:text-base text-muted">
+              {t("questions_subtitle")}
+            </p>
+          </motion.div>
 
-              <div className="space-y-3.5">
-                <Input
-                  label={t("auth_email_label")}
-                  value={testEmail}
-                  onChange={(e) => setTestEmail(e.target.value)}
-                  placeholder={t("auth_email_placeholder")}
-                  helperText="Enterprise single sign-on enabled"
-                />
+          {/* Cards with Connecting Flowing Line */}
+          <div className="relative">
+            {/* Animated flowing gradient line behind cards (desktop) */}
+            <div className="hidden lg:block absolute top-1/2 left-8 right-8 h-1 -translate-y-1/2 z-0">
+              <div className="w-full h-full bg-gradient-to-r from-primary via-cyan to-pink opacity-30 rounded-full" />
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white to-transparent opacity-60 animate-shimmer" />
+            </div>
 
-                <PasswordInput
-                  label={t("auth_password_label")}
-                  value={testPassword}
-                  onChange={(e) => setTestPassword(e.target.value)}
-                  placeholder={t("auth_password_placeholder")}
-                />
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-10">
+              {/* Question 1 */}
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.5, delay: 0.1 }}
+              >
+                <GlassCard hover className="h-full border-warn/30 shadow-glow-warn flex flex-col justify-between">
+                  <div>
+                    <div className="p-3.5 rounded-2xl bg-warn/15 text-warn border border-warn/30 w-fit mb-5 shadow-sm">
+                      <AlertTriangle className="w-6 h-6" />
+                    </div>
+                    <span className="text-xs font-bold text-warn tracking-widest uppercase">
+                      Telemetry Ingestion
+                    </span>
+                    <h3 className="text-xl font-bold font-heading text-text mt-1 mb-3">
+                      {t("q1_title")}
+                    </h3>
+                    <p className="text-sm text-muted leading-relaxed">
+                      {t("q1_desc")}
+                    </p>
+                  </div>
+                  <div className="pt-4 mt-4 border-t border-glass-border flex items-center text-xs font-semibold text-warn">
+                    <span>Incident Sensing</span>
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </div>
+                </GlassCard>
+              </motion.div>
 
-                <Select
-                  label={t("auth_switch_role")}
-                  value={testRole}
-                  onChange={(e) => {
-                    setTestRole(e.target.value);
-                    switchRole(e.target.value);
-                    toast({
-                      type: "info",
-                      title: "Role Switched",
-                      description: `Active role changed to ${e.target.value}`,
-                    });
-                  }}
-                  options={[
-                    { value: "admin", label: t("role_admin") },
-                    { value: "driver", label: t("role_driver") },
-                    { value: "emergency", label: t("role_emergency") },
-                  ]}
-                />
-              </div>
+              {/* Question 2 */}
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.5, delay: 0.2 }}
+              >
+                <GlassCard hover className="h-full border-cyan/30 shadow-glow-cyan flex flex-col justify-between">
+                  <div>
+                    <div className="p-3.5 rounded-2xl bg-cyan/15 text-cyan border border-cyan/30 w-fit mb-5 shadow-sm">
+                      <Activity className="w-6 h-6" />
+                    </div>
+                    <span className="text-xs font-bold text-cyan tracking-widest uppercase">
+                      Ripple Topology
+                    </span>
+                    <h3 className="text-xl font-bold font-heading text-text mt-1 mb-3">
+                      {t("q2_title")}
+                    </h3>
+                    <p className="text-sm text-muted leading-relaxed">
+                      {t("q2_desc")}
+                    </p>
+                  </div>
+                  <div className="pt-4 mt-4 border-t border-glass-border flex items-center text-xs font-semibold text-cyan">
+                    <span>Downstream Propagation</span>
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </div>
+                </GlassCard>
+              </motion.div>
 
-              <div>
-                <h3 className="text-sm font-bold uppercase tracking-wider text-muted mb-3">
-                  Avatars & Skeleton Loaders
-                </h3>
-                <div className="flex items-center gap-4 flex-wrap">
-                  <Avatar name="Kovai Swift" status="online" size="lg" />
-                  <Avatar name="Selvi Ramasamy" status="busy" size="md" />
-                  <Avatar name="Emergency Cargo" status="emergency" size="md" />
-                  <Avatar name="Karthik R" status="offline" size="sm" />
+              {/* Question 3 */}
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.5, delay: 0.3 }}
+              >
+                <GlassCard hover className="h-full border-primary/30 shadow-glow flex flex-col justify-between">
+                  <div>
+                    <div className="p-3.5 rounded-2xl bg-primary/15 text-primary border border-primary/30 w-fit mb-5 shadow-sm">
+                      <Zap className="w-6 h-6" />
+                    </div>
+                    <span className="text-xs font-bold text-primary tracking-widest uppercase">
+                      Quantum Action
+                    </span>
+                    <h3 className="text-xl font-bold font-heading text-text mt-1 mb-3">
+                      {t("q3_title")}
+                    </h3>
+                    <p className="text-sm text-muted leading-relaxed">
+                      {t("q3_desc")}
+                    </p>
+                  </div>
+                  <div className="pt-4 mt-4 border-t border-glass-border flex items-center text-xs font-semibold text-primary">
+                    <span>Adaptive Swarm Convergence</span>
+                    <ChevronRight className="w-4 h-4 ml-1" />
+                  </div>
+                </GlassCard>
+              </motion.div>
+            </div>
+          </div>
+        </section>
 
-                  {/* Skeleton samples */}
-                  <div className="flex flex-col gap-1.5 w-32">
-                    <Skeleton variant="text" width="100%" />
-                    <Skeleton variant="text" width="70%" />
+        {/* ====================================================================
+            4. SPECIALITIES: Bento Grid (6 Tiles with Animated CSS/SVG Visuals)
+            ==================================================================== */}
+        <section id="features" className="px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+          <motion.div {...fadeInUp} className="text-center max-w-3xl mx-auto mb-12 space-y-3">
+            <Badge variant="info" size="sm">
+              {t("bento_badge")}
+            </Badge>
+            <h2 className="text-3xl sm:text-4xl font-extrabold font-heading text-text">
+              {t("bento_title")}
+            </h2>
+            <p className="text-sm sm:text-base text-muted">
+              {t("bento_subtitle")}
+            </p>
+          </motion.div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            
+            {/* Tile 1 (LARGEST: Spans 2 Columns): QARS Engine with Animated Swarm Visual */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              className="md:col-span-2"
+            >
+              <GlassCard hover className="h-full border-primary/40 shadow-glow p-6 sm:p-8 flex flex-col justify-between relative overflow-hidden">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+                  <div className="lg:col-span-7 space-y-3">
+                    <Badge variant="info" size="sm">
+                      {t("bento_1_tag")}
+                    </Badge>
+                    <h3 className="text-2xl font-bold font-heading text-text">
+                      {t("bento_1_title")}
+                    </h3>
+                    <p className="text-sm text-muted leading-relaxed">
+                      {t("bento_1_desc")}
+                    </p>
+                    <div className="flex items-center gap-4 pt-2 text-xs text-muted">
+                      <div className="flex items-center gap-1.5">
+                        <Check className="w-4 h-4 text-safe" />
+                        <span>QPSO Energy Modeling</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <Check className="w-4 h-4 text-safe" />
+                        <span>Dynamic Grade Resistance</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Animated CSS Particle Swarm Visual */}
+                  <div className="lg:col-span-5 h-48 sm:h-56 relative flex items-center justify-center rounded-2xl bg-bg/80 border border-glass-border overflow-hidden">
+                    <svg className="w-full h-full" viewBox="0 0 300 200" fill="none">
+                      {/* Flowing background routes */}
+                      <path
+                        d="M 30,100 Q 150,20 270,100"
+                        stroke="rgba(255,255,255,0.08)"
+                        strokeWidth="2"
+                        strokeDasharray="4 4"
+                      />
+                      <path
+                        d="M 30,100 Q 150,180 270,100"
+                        stroke="rgba(255,255,255,0.08)"
+                        strokeWidth="2"
+                        strokeDasharray="4 4"
+                      />
+                      {/* QARS Collapsed Optimal Route (Neon Glow) */}
+                      <path
+                        d="M 30,100 C 110,60 190,70 270,100"
+                        stroke="var(--cyan)"
+                        strokeWidth="3.5"
+                        strokeLinecap="round"
+                      />
+
+                      {/* Swarm particles converging */}
+                      <circle cx="85" cy="80" r="3" fill="var(--primary)" className="animate-ping opacity-75" />
+                      <circle cx="150" cy="73" r="4.5" fill="var(--cyan)" className="animate-pulse" />
+                      <circle cx="210" cy="86" r="3" fill="var(--pink)" className="animate-ping opacity-75" />
+
+                      {/* Start and End Hubs */}
+                      <circle cx="30" cy="100" r="6" fill="var(--primary)" stroke="#fff" strokeWidth="1.5" />
+                      <circle cx="270" cy="100" r="6" fill="var(--safe)" stroke="#fff" strokeWidth="1.5" />
+
+                      <text x="30" y="125" fill="var(--muted)" fontSize="9" textAnchor="middle">Peelamedu</text>
+                      <text x="270" y="125" fill="var(--muted)" fontSize="9" textAnchor="middle">Destination</text>
+                    </svg>
+                    <span className="absolute bottom-2 text-[10px] text-cyan font-mono bg-bg-2/80 px-2 py-0.5 rounded border border-glass-border">
+                      128 Particles Converging (0.014s)
+                    </span>
                   </div>
                 </div>
-              </div>
-            </GlassCard>
+              </GlassCard>
+            </motion.div>
+
+            {/* Tile 2: Live Fleet on Satellite & Terrain Maps */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ delay: 0.1 }}
+            >
+              <GlassCard hover className="h-full p-6 flex flex-col justify-between">
+                <div>
+                  <div className="h-36 rounded-2xl bg-bg/70 border border-glass-border mb-5 relative overflow-hidden flex items-center justify-center">
+                    {/* Topographic elevation contours simulation */}
+                    <svg className="w-full h-full opacity-60" viewBox="0 0 200 120">
+                      <path d="M 0,30 Q 50,70 100,40 T 200,60" stroke="var(--cyan)" strokeWidth="1.2" fill="none" opacity="0.4" />
+                      <path d="M 0,60 Q 60,100 120,70 T 200,90" stroke="var(--primary)" strokeWidth="1.2" fill="none" opacity="0.6" />
+                      <path d="M 0,90 Q 70,120 140,95 T 200,110" stroke="var(--pink)" strokeWidth="1.2" fill="none" opacity="0.3" />
+                      {/* Live driver marker pin */}
+                      <circle cx="110" cy="65" r="4.5" fill="var(--safe)" className="animate-ping" />
+                      <circle cx="110" cy="65" r="3" fill="#fff" />
+                    </svg>
+                    <span className="absolute top-2 right-2 text-[10px] bg-primary/20 text-primary border border-primary/30 px-2 py-0.5 rounded font-bold">
+                      CARTO + Esri
+                    </span>
+                  </div>
+
+                  <Badge variant="safe" size="sm">
+                    {t("bento_2_tag")}
+                  </Badge>
+                  <h3 className="text-lg font-bold font-heading text-text mt-2 mb-2">
+                    {t("bento_2_title")}
+                  </h3>
+                  <p className="text-xs text-muted leading-relaxed">
+                    {t("bento_2_desc")}
+                  </p>
+                </div>
+              </GlassCard>
+            </motion.div>
+
+            {/* Tile 3: Hazard Intelligence (Rain, Landslide, Accidents) */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ delay: 0.2 }}
+            >
+              <GlassCard hover className="h-full p-6 flex flex-col justify-between border-warn/30">
+                <div>
+                  <div className="h-36 rounded-2xl bg-bg/70 border border-glass-border mb-5 relative p-4 flex flex-col justify-between overflow-hidden">
+                    <div className="flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 text-xs font-bold text-warn">
+                        <AlertTriangle className="w-4 h-4 animate-bounce" />
+                        Ghat Section Alert
+                      </span>
+                      <span className="text-[10px] text-muted">&lt; 2s</span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-glass border border-glass-border text-[11px] text-text font-mono">
+                      Mettupalayam KM 14: Landslide detected
+                    </div>
+                    <div className="w-full bg-warn/20 h-1.5 rounded-full overflow-hidden">
+                      <div className="bg-warn h-full w-4/5 animate-pulse" />
+                    </div>
+                  </div>
+
+                  <Badge variant="warn" size="sm">
+                    {t("bento_3_tag")}
+                  </Badge>
+                  <h3 className="text-lg font-bold font-heading text-text mt-2 mb-2">
+                    {t("bento_3_title")}
+                  </h3>
+                  <p className="text-xs text-muted leading-relaxed">
+                    {t("bento_3_desc")}
+                  </p>
+                </div>
+              </GlassCard>
+            </motion.div>
+
+            {/* Tile 4: Emergency Priority for Medical & Food Cargo */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ delay: 0.3 }}
+            >
+              <GlassCard hover className="h-full p-6 flex flex-col justify-between border-pink/30 shadow-glow-pink">
+                <div>
+                  <div className="h-36 rounded-2xl bg-bg/70 border border-glass-border mb-5 relative flex items-center justify-center p-4">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3 rounded-2xl bg-pink/20 text-pink border border-pink/40 animate-pulse">
+                        <HeartPulse className="w-8 h-8" />
+                      </div>
+                      <div className="flex flex-col text-left">
+                        <span className="text-xs font-bold text-pink">Medical Oxygen</span>
+                        <span className="text-[11px] text-muted">Lifespan reserve: 3h 30m</span>
+                        <span className="text-[10px] text-safe font-semibold">Priority: Priority-Alpha</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <Badge variant="emergency" size="sm" pulse>
+                    {t("bento_4_tag")}
+                  </Badge>
+                  <h3 className="text-lg font-bold font-heading text-text mt-2 mb-2">
+                    {t("bento_4_title")}
+                  </h3>
+                  <p className="text-xs text-muted leading-relaxed">
+                    {t("bento_4_desc")}
+                  </p>
+                </div>
+              </GlassCard>
+            </motion.div>
+
+            {/* Tile 5: Real SMS with Assured ETA */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ delay: 0.4 }}
+            >
+              <GlassCard hover className="h-full p-6 flex flex-col justify-between">
+                <div>
+                  <div className="h-36 rounded-2xl bg-bg/70 border border-glass-border mb-5 p-3 flex flex-col justify-center gap-2">
+                    <div className="p-2.5 rounded-xl bg-glass border border-glass-border text-[11px] text-text shadow-sm">
+                      <p className="font-semibold text-primary text-[10px]">SMS from KovaiSwift</p>
+                      <p className="text-[10px] text-muted line-clamp-2">
+                        Rerouted via Annur due to roadblock. Assured ETA: 18 mins.
+                      </p>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-muted px-1">
+                      <span>Delivered via GSM Gateway</span>
+                      <span className="text-safe flex items-center gap-0.5">
+                        <Check className="w-3 h-3" /> Sent
+                      </span>
+                    </div>
+                  </div>
+
+                  <Badge variant="info" size="sm">
+                    {t("bento_5_tag")}
+                  </Badge>
+                  <h3 className="text-lg font-bold font-heading text-text mt-2 mb-2">
+                    {t("bento_5_title")}
+                  </h3>
+                  <p className="text-xs text-muted leading-relaxed">
+                    {t("bento_5_desc")}
+                  </p>
+                </div>
+              </GlassCard>
+            </motion.div>
+
+            {/* Tile 6: English & Tamil Bilingual Intelligence */}
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ delay: 0.5 }}
+            >
+              <GlassCard hover className="h-full p-6 flex flex-col justify-between">
+                <div>
+                  <div className="h-36 rounded-2xl bg-bg/70 border border-glass-border mb-5 flex flex-col items-center justify-center gap-2 p-3">
+                    <div className="flex items-center gap-3">
+                      <div className="px-3 py-1.5 rounded-xl bg-glass border border-glass-border text-xs font-bold text-text">
+                        English
+                      </div>
+                      <Globe className="w-4 h-4 text-primary animate-spin" />
+                      <div className="px-3 py-1.5 rounded-xl bg-primary/20 border border-primary/40 text-xs font-bold text-cyan">
+                        தமிழ்
+                      </div>
+                    </div>
+                    <span className="text-[11px] text-muted">
+                      இயல்பான தமிழ் மற்றும் ஆங்கில வழிகாட்டல்
+                    </span>
+                  </div>
+
+                  <Badge variant="neutral" size="sm">
+                    {t("bento_6_tag")}
+                  </Badge>
+                  <h3 className="text-lg font-bold font-heading text-text mt-2 mb-2">
+                    {t("bento_6_title")}
+                  </h3>
+                  <p className="text-xs text-muted leading-relaxed">
+                    {t("bento_6_desc")}
+                  </p>
+                </div>
+              </GlassCard>
+            </motion.div>
 
           </div>
+        </section>
+
+        {/* ====================================================================
+            5. HOW IT WORKS (5-Step Timeline)
+            ==================================================================== */}
+        <section id="how-it-works" className="px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+          <motion.div {...fadeInUp} className="text-center max-w-3xl mx-auto mb-14 space-y-3">
+            <Badge variant="primary" size="sm">
+              {t("how_badge")}
+            </Badge>
+            <h2 className="text-3xl sm:text-4xl font-extrabold font-heading text-text">
+              {t("how_title")}
+            </h2>
+            <p className="text-sm sm:text-base text-muted">
+              {t("how_subtitle")}
+            </p>
+          </motion.div>
+
+          {/* 5-Step Timeline: Horizontal on Desktop, Vertical on Mobile */}
+          <div className="relative">
+            {/* Desktop continuous track bar */}
+            <div className="hidden lg:block absolute top-7 left-12 right-12 h-0.5 bg-gradient-to-r from-warn via-primary to-safe opacity-30 z-0" />
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6 relative z-10">
+              
+              {/* Step 1 */}
+              <motion.div
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.4, delay: 0.1 }}
+                className="flex flex-col items-center lg:items-start text-center lg:text-left"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-warn/15 border border-warn/30 text-warn flex items-center justify-center font-bold font-heading text-lg mb-4 shadow-glow-warn">
+                  01
+                </div>
+                <h4 className="text-base font-bold font-heading text-text mb-1">
+                  {t("how_step_1_title")}
+                </h4>
+                <p className="text-xs text-muted leading-relaxed">
+                  {t("how_step_1_desc")}
+                </p>
+              </motion.div>
+
+              {/* Step 2 */}
+              <motion.div
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.4, delay: 0.2 }}
+                className="flex flex-col items-center lg:items-start text-center lg:text-left"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-cyan/15 border border-cyan/30 text-cyan flex items-center justify-center font-bold font-heading text-lg mb-4 shadow-glow-cyan">
+                  02
+                </div>
+                <h4 className="text-base font-bold font-heading text-text mb-1">
+                  {t("how_step_2_title")}
+                </h4>
+                <p className="text-xs text-muted leading-relaxed">
+                  {t("how_step_2_desc")}
+                </p>
+              </motion.div>
+
+              {/* Step 3 */}
+              <motion.div
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.4, delay: 0.3 }}
+                className="flex flex-col items-center lg:items-start text-center lg:text-left"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-primary/20 border border-primary/40 text-primary flex items-center justify-center font-bold font-heading text-lg mb-4 shadow-glow">
+                  03
+                </div>
+                <h4 className="text-base font-bold font-heading text-text mb-1">
+                  {t("how_step_3_title")}
+                </h4>
+                <p className="text-xs text-muted leading-relaxed">
+                  {t("how_step_3_desc")}
+                </p>
+              </motion.div>
+
+              {/* Step 4 */}
+              <motion.div
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.4, delay: 0.4 }}
+                className="flex flex-col items-center lg:items-start text-center lg:text-left"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-pink/15 border border-pink/30 text-pink flex items-center justify-center font-bold font-heading text-lg mb-4 shadow-glow-pink">
+                  04
+                </div>
+                <h4 className="text-base font-bold font-heading text-text mb-1">
+                  {t("how_step_4_title")}
+                </h4>
+                <p className="text-xs text-muted leading-relaxed">
+                  {t("how_step_4_desc")}
+                </p>
+              </motion.div>
+
+              {/* Step 5 */}
+              <motion.div
+                initial={{ opacity: 0, y: 24 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.4, delay: 0.5 }}
+                className="flex flex-col items-center lg:items-start text-center lg:text-left"
+              >
+                <div className="w-14 h-14 rounded-2xl bg-safe/15 border border-safe/30 text-safe flex items-center justify-center font-bold font-heading text-lg mb-4 shadow-glow-safe">
+                  05
+                </div>
+                <h4 className="text-base font-bold font-heading text-text mb-1">
+                  {t("how_step_5_title")}
+                </h4>
+                <p className="text-xs text-muted leading-relaxed">
+                  {t("how_step_5_desc")}
+                </p>
+              </motion.div>
+
+            </div>
+          </div>
+        </section>
+
+        {/* ====================================================================
+            6. ROLES SECTION (Admin, Driver, Emergency)
+            ==================================================================== */}
+        <section id="roles" className="px-4 sm:px-6 lg:px-8 max-w-7xl mx-auto w-full">
+          <motion.div {...fadeInUp} className="text-center max-w-3xl mx-auto mb-12 space-y-3">
+            <Badge variant="info" size="sm">
+              {t("roles_badge")}
+            </Badge>
+            <h2 className="text-3xl sm:text-4xl font-extrabold font-heading text-text">
+              {t("roles_title")}
+            </h2>
+            <p className="text-sm sm:text-base text-muted">
+              {t("roles_subtitle")}
+            </p>
+          </motion.div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            
+            {/* Role 1: Admin */}
+            <motion.div
+              initial={{ opacity: 0, y: 24 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ delay: 0.1 }}
+            >
+              <GlassCard hover className="h-full p-7 flex flex-col justify-between border-primary/30">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="p-3 rounded-2xl bg-primary/15 text-primary border border-primary/30">
+                      <Sliders className="w-6 h-6" />
+                    </span>
+                    <Badge variant="info" size="sm">
+                      CENTRAL
+                    </Badge>
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold font-heading text-text">
+                      {t("role_admin_title")}
+                    </h3>
+                    <p className="text-xs text-muted mt-0.5">
+                      {t("role_admin_sub")}
+                    </p>
+                  </div>
+
+                  <ul className="space-y-2.5 pt-2 text-xs sm:text-sm text-muted">
+                    <li className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                      <span>{t("role_admin_b1")}</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                      <span>{t("role_admin_b2")}</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                      <span>{t("role_admin_b3")}</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="pt-6 mt-6 border-t border-glass-border">
+                  <Link href="/signup?role=admin" className="w-full block">
+                    <Button variant="primary" size="md" className="w-full">
+                      {t("role_admin_btn")}
+                    </Button>
+                  </Link>
+                </div>
+              </GlassCard>
+            </motion.div>
+
+            {/* Role 2: Driver */}
+            <motion.div
+              initial={{ opacity: 0, y: 24 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ delay: 0.2 }}
+            >
+              <GlassCard hover className="h-full p-7 flex flex-col justify-between border-cyan/30 shadow-glow-cyan">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="p-3 rounded-2xl bg-cyan/15 text-cyan border border-cyan/30">
+                      <Truck className="w-6 h-6" />
+                    </span>
+                    <Badge variant="safe" size="sm">
+                      FIELD HUD
+                    </Badge>
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold font-heading text-text">
+                      {t("role_driver_title")}
+                    </h3>
+                    <p className="text-xs text-muted mt-0.5">
+                      {t("role_driver_sub")}
+                    </p>
+                  </div>
+
+                  <ul className="space-y-2.5 pt-2 text-xs sm:text-sm text-muted">
+                    <li className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-cyan shrink-0 mt-0.5" />
+                      <span>{t("role_driver_b1")}</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-cyan shrink-0 mt-0.5" />
+                      <span>{t("role_driver_b2")}</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-cyan shrink-0 mt-0.5" />
+                      <span>{t("role_driver_b3")}</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="pt-6 mt-6 border-t border-glass-border">
+                  <Link href="/signup?role=driver" className="w-full block">
+                    <Button variant="cyan" size="md" className="w-full">
+                      {t("role_driver_btn")}
+                    </Button>
+                  </Link>
+                </div>
+              </GlassCard>
+            </motion.div>
+
+            {/* Role 3: Emergency */}
+            <motion.div
+              initial={{ opacity: 0, y: 24 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true }}
+              transition={{ delay: 0.3 }}
+            >
+              <GlassCard hover className="h-full p-7 flex flex-col justify-between border-pink/40 shadow-glow-pink">
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="p-3 rounded-2xl bg-pink/20 text-pink border border-pink/40">
+                      <HeartPulse className="w-6 h-6" />
+                    </span>
+                    <Badge variant="emergency" size="sm" pulse>
+                      PRIORITY 1
+                    </Badge>
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-bold font-heading text-text">
+                      {t("role_emergency_title")}
+                    </h3>
+                    <p className="text-xs text-muted mt-0.5">
+                      {t("role_emergency_sub")}
+                    </p>
+                  </div>
+
+                  <ul className="space-y-2.5 pt-2 text-xs sm:text-sm text-muted">
+                    <li className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-pink shrink-0 mt-0.5" />
+                      <span>{t("role_emergency_b1")}</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-pink shrink-0 mt-0.5" />
+                      <span>{t("role_emergency_b2")}</span>
+                    </li>
+                    <li className="flex items-start gap-2">
+                      <Check className="w-4 h-4 text-pink shrink-0 mt-0.5" />
+                      <span>{t("role_emergency_b3")}</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="pt-6 mt-6 border-t border-glass-border">
+                  <Link href="/signup?role=emergency" className="w-full block">
+                    <Button variant="danger" size="md" className="w-full">
+                      {t("role_emergency_btn")}
+                    </Button>
+                  </Link>
+                </div>
+              </GlassCard>
+            </motion.div>
+
+          </div>
+        </section>
+
+        {/* ====================================================================
+            7. CONTACT SECTION (Information + Front-end only form)
+            ==================================================================== */}
+        <section id="contact" className="px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto w-full">
+          <motion.div {...fadeInUp}>
+            <GlassCard padding="p-8 sm:p-12" className="border-glass-border shadow-2xl">
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+                
+                {/* Left Information */}
+                <div className="lg:col-span-5 flex flex-col justify-between space-y-6">
+                  <div className="space-y-4">
+                    <Badge variant="info" size="sm">
+                      {t("contact_badge")}
+                    </Badge>
+                    <h2 className="text-2xl sm:text-3xl font-extrabold font-heading text-text">
+                      {t("contact_title")}
+                    </h2>
+                    <p className="text-xs sm:text-sm text-muted leading-relaxed">
+                      {t("contact_subtitle")}
+                    </p>
+                  </div>
+
+                  {/* Institutional & Team details */}
+                  <div className="space-y-4 pt-4 border-t border-glass-border text-xs sm:text-sm">
+                    <div className="flex items-start gap-3">
+                      <Building className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-text">{t("contact_org")}</span>
+                        <p className="text-xs text-muted">Saravanampatti, Coimbatore, Tamil Nadu</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                      <Truck className="w-5 h-5 text-cyan shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-text">{t("contact_team")}</span>
+                        <p className="text-xs text-muted">KovaiSwift Regional Logistics Unit</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                      <Mail className="w-5 h-5 text-pink shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-text">{t("contact_email")}</span>
+                        <p className="text-xs text-muted">Dispatch & Developer Feed</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                      <Phone className="w-5 h-5 text-safe shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-semibold text-text">{t("contact_phone")}</span>
+                        <p className="text-xs text-muted">Direct Operational Inquiries</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Right Form */}
+                <div className="lg:col-span-7">
+                  <form onSubmit={handleContactSubmit} className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <Input
+                        label={t("contact_form_name")}
+                        placeholder={t("contact_form_name_placeholder")}
+                        value={contactName}
+                        onChange={(e) => setContactName(e.target.value)}
+                        required
+                      />
+
+                      <Input
+                        label={t("contact_form_email")}
+                        type="email"
+                        placeholder={t("contact_form_email_placeholder")}
+                        value={contactEmail}
+                        onChange={(e) => setContactEmail(e.target.value)}
+                        required
+                      />
+                    </div>
+
+                    <Select
+                      label={t("contact_form_role")}
+                      value={contactRole}
+                      onChange={(e) => setContactRole(e.target.value)}
+                      options={[
+                        { value: "admin", label: "Operations Manager / Dispatcher" },
+                        { value: "driver", label: "Fleet Logistics Driver" },
+                        { value: "emergency", label: "Hospital / Healthcare Cargo Dispatcher" },
+                      ]}
+                    />
+
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-medium text-muted tracking-wide">
+                        {t("contact_form_message")}
+                      </label>
+                      <textarea
+                        rows={4}
+                        required
+                        value={contactMessage}
+                        onChange={(e) => setContactMessage(e.target.value)}
+                        placeholder={t("contact_form_message_placeholder")}
+                        className="w-full bg-glass text-text placeholder-muted/60 text-sm rounded-xl px-4 py-2.5 border border-glass-border focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all duration-200 resize-none"
+                      />
+                    </div>
+
+                    <Button
+                      type="submit"
+                      variant="primary"
+                      size="md"
+                      className="w-full mt-2"
+                      loading={contactLoading}
+                      icon={Send}
+                    >
+                      {t("contact_btn_send")}
+                    </Button>
+                  </form>
+                </div>
+
+              </div>
+            </GlassCard>
+          </motion.div>
         </section>
 
       </main>
 
       {/* ====================================================================
-          SAMPLE MODAL COMPONENT
+          8. FOOTER
           ==================================================================== */}
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="KovaiSwift Mission Briefing"
-        description="Hazard Disruption Response & Dispatch Protocol"
-        size="md"
-      >
-        <div className="space-y-4 text-xs sm:text-sm text-muted">
-          <p>
-            When disruptions like landslides on the Mettupalayam ghat or Avinashi road pileups are detected, the system immediately assesses all active deliveries.
-          </p>
-          <div className="p-3.5 rounded-xl bg-glass border border-glass-border space-y-2">
-            <div className="flex items-center justify-between text-text font-semibold">
-              <span>Automatic Protocol:</span>
-              <Badge variant="safe" size="sm">ACTIVE</Badge>
+      <footer className="border-t border-glass-border bg-bg-2/80 backdrop-blur-xl py-12 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
+          
+          {/* Brand */}
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-glass border border-glass-border flex items-center justify-center shadow-glow">
+              <svg viewBox="0 0 44 44" fill="none" className="w-5 h-5">
+                <circle cx="22" cy="22" r="13" stroke="var(--cyan)" strokeWidth="1.8" />
+                <path d="M14 26C16 20 20 16 25 15C29 14.3 32 17 33 22" stroke="var(--primary)" strokeWidth="2.5" strokeLinecap="round" />
+                <circle cx="29" cy="11" r="3" fill="var(--cyan)" />
+              </svg>
             </div>
-            <ul className="list-disc list-inside space-y-1 text-muted text-xs">
-              <li>Emergency medical loads receive instant green-corridor priority.</li>
-              <li>Customers receive real-time transparent SMS notifications with revised ETAs.</li>
-              <li>Drivers receive QARS adaptive swarm alternatives with a single tap.</li>
-            </ul>
+            <div className="flex flex-col text-left">
+              <span className="text-base font-extrabold font-heading text-text">
+                Ripple<span className="text-primary font-black">Route</span>
+              </span>
+              <span className="text-[10px] text-muted -mt-0.5">
+                {t("footer_desc")}
+              </span>
+            </div>
           </div>
-          <div className="flex items-center justify-end gap-2 pt-2">
-            <Button variant="ghost" size="sm" onClick={() => setIsModalOpen(false)}>
-              {t("btn_close")}
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => {
-                setIsModalOpen(false);
-                toast({
-                  type: "success",
-                  title: "Protocol Confirmed",
-                  description: "All dispatcher channels synchronized.",
-                });
-              }}
-            >
-              {t("btn_confirm")}
-            </Button>
+
+          {/* Links */}
+          <div className="flex items-center gap-6 text-xs text-muted flex-wrap justify-center">
+            <a href="#about" className="hover:text-text transition-colors">
+              {t("nav_about")}
+            </a>
+            <a href="#features" className="hover:text-text transition-colors">
+              {t("nav_features")}
+            </a>
+            <a href="#how-it-works" className="hover:text-text transition-colors">
+              {t("nav_how_it_works")}
+            </a>
+            <a href="#roles" className="hover:text-text transition-colors">
+              {t("nav_roles")}
+            </a>
+            <a href="#contact" className="hover:text-text transition-colors">
+              {t("nav_contact")}
+            </a>
           </div>
+
+          {/* Copyright */}
+          <div className="text-xs text-muted text-center md:text-right">
+            <p>{t("footer_copy")}</p>
+          </div>
+
         </div>
-      </Modal>
-
-      {/* ====================================================================
-          SAMPLE DRAWER COMPONENT
-          ==================================================================== */}
-      <Drawer
-        isOpen={isDrawerOpen}
-        onClose={() => setIsDrawerOpen(false)}
-        title="Fleet Telemetry Console"
-        description="KovaiSwift Logistics Coimbatore Live Monitoring"
-        position="right"
-        size="md"
-      >
-        <div className="space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-glass-border">
-            <span className="text-xs font-semibold text-muted">Driver Telemetry</span>
-            <Badge variant="info" size="sm">4 Connected</Badge>
-          </div>
-
-          <div className="space-y-3">
-            <GlassCard padding="p-3.5" hover className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Avatar name="Karthik Raja" status="online" size="sm" />
-                <div>
-                  <p className="text-xs font-bold text-text">Karthik Raja</p>
-                  <p className="text-[10px] text-muted">TN-37-BY-4512 • 82% Battery</p>
-                </div>
-              </div>
-              <Badge variant="safe" size="sm">Active</Badge>
-            </GlassCard>
-
-            <GlassCard padding="p-3.5" hover className="flex items-center justify-between border-pink/30">
-              <div className="flex items-center gap-3">
-                <Avatar name="Praveen Kumar" status="emergency" size="sm" />
-                <div>
-                  <p className="text-xs font-bold text-pink">Praveen Kumar</p>
-                  <p className="text-[10px] text-muted">Medical O2 • 3.5 hrs reserve</p>
-                </div>
-              </div>
-              <Badge variant="emergency" size="sm">Disrupted</Badge>
-            </GlassCard>
-
-            <GlassCard padding="p-3.5" hover className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Avatar name="Senthil Nathan" status="online" size="sm" />
-                <div>
-                  <p className="text-xs font-bold text-text">Senthil Nathan</p>
-                  <p className="text-[10px] text-muted">Singanallur Terminal • 22m ETA</p>
-                </div>
-              </div>
-              <Badge variant="safe" size="sm">Optimal</Badge>
-            </GlassCard>
-          </div>
-
-          <div className="pt-4 border-t border-glass-border">
-            <Button
-              variant="primary"
-              size="md"
-              className="w-full"
-              icon={Zap}
-              loading={isQarsLoading}
-              onClick={handleOptimizeQars}
-            >
-              {t("qars_btn_optimize")}
-            </Button>
-          </div>
-        </div>
-      </Drawer>
+      </footer>
     </div>
   );
 }
