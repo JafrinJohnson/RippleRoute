@@ -21,7 +21,9 @@ import {
   ArrowRight,
   Compass,
 } from "lucide-react";
+import { useLanguage } from "@/context/LanguageContext";
 import Button from "@/components/ui/Button";
+import { Skeleton, EmptyState } from "@/components/ui";
 
 // Real Coimbatore Waypoints
 const DEPOT_COORDS = { lat: 11.0270, lng: 77.0100 }; // Peelamedu Depot
@@ -147,6 +149,7 @@ const SAMPLE_DELIVERIES = [
 ];
 
 export default function LiveMapPage() {
+  const { isTamil } = useLanguage();
   const [routes, setRoutes] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [loadingRoutes, setLoadingRoutes] = useState(true);
@@ -370,18 +373,19 @@ export default function LiveMapPage() {
             <div className="flex items-center gap-2 mb-1.5">
               <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-safe/15 text-safe border border-safe/30 flex items-center gap-1">
                 <Radio className="w-3 h-3 text-safe animate-pulse" />
-                Live Mission Control
+                {isTamil ? "நேரடி மிஷன் கட்டுப்பாடு" : "Live Mission Control"}
               </span>
               <span className="text-xs text-muted font-mono">
-                Coimbatore Urban Core &bull; Peelamedu Central Depot
+                {isTamil ? "கோவை நகர்ப்புற மையம் • பீளமேடு மத்திய கிடங்கு" : "Coimbatore Urban Core • Peelamedu Central Depot"}
               </span>
             </div>
             <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight font-heading">
-              Live Fleet Map
+              {isTamil ? "நேரடி கடற்படை வரைபடம்" : "Live Fleet Map"}
             </h1>
-            <p className="text-xs sm:text-sm text-muted mt-1 max-w-2xl">
-              Real-time KovaiSwift fleet telemetry, OSRM road geometry alignment, active
-              Western Ghats hazards, and autonomous QARS swarm corridors.
+            <p className="text-xs sm:text-sm text-muted mt-1 max-w-2xl leading-relaxed">
+              {isTamil
+                ? "நிகழ்நேர KovaiSwift கடற்படை தொலை அளவியல், OSRM சாலை வடிவமைப்பு, தீவிர மேற்குத் தொடர்ச்சி மலை அபாயங்கள் மற்றும் தன்னாட்சி QARS திரள் வழிகள்."
+                : "Real-time KovaiSwift fleet telemetry, OSRM road geometry alignment, active Western Ghats hazards, and autonomous QARS swarm corridors."}
             </p>
           </div>
 
@@ -390,14 +394,14 @@ export default function LiveMapPage() {
             {roadError ? (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-danger/20 border border-danger/40 text-danger text-xs font-medium">
                 <AlertCircle size={14} />
-                <span>Road data unavailable, retry</span>
+                <span>{isTamil ? "சாலை தரவு கிடைக்கவில்லை, மீண்டும் முயற்சிக்கவும்" : "Road data unavailable, retry"}</span>
                 <Button
                   variant="danger"
                   size="sm"
                   onClick={loadRealRoads}
-                  className="ml-1 h-7 text-xs px-2"
+                  className="ml-1 h-7 text-xs px-2 btn-hover"
                 >
-                  Retry
+                  {isTamil ? "மீண்டும் முயற்சி" : "Retry"}
                 </Button>
               </div>
             ) : (
@@ -408,9 +412,11 @@ export default function LiveMapPage() {
                   iconLeft={isAutoSimulating ? Pause : Play}
                   onClick={() => setIsAutoSimulating((prev) => !prev)}
                   disabled={loadingRoutes}
-                  className="shadow-lg shadow-primary/20"
+                  className="shadow-lg shadow-primary/20 btn-hover"
                 >
-                  {isAutoSimulating ? "Pause Simulation" : "Resume Live Sim"}
+                  {isAutoSimulating
+                    ? isTamil ? "நிறுத்து" : "Pause Simulation"
+                    : isTamil ? "தொடங்கு" : "Resume Live Sim"}
                 </Button>
                 <Button
                   variant="secondary"
@@ -418,24 +424,29 @@ export default function LiveMapPage() {
                   iconLeft={Play}
                   onClick={handleSimulateStep}
                   disabled={loadingRoutes}
+                  className="btn-hover"
                 >
-                  Step Telemetry ({pingCount})
+                  {isTamil ? "படி அளவியல்" : "Step Telemetry"} ({pingCount})
                 </Button>
                 <Button
                   variant="secondary"
                   size="sm"
                   iconLeft={Maximize2}
                   onClick={() => setFitToRoutes((prev) => !prev)}
+                  className="btn-hover"
                 >
-                  {fitToRoutes ? "Unfit Bounds" : "Fit to Routes"}
+                  {fitToRoutes
+                    ? isTamil ? "அளவை மீட்டமை" : "Unfit Bounds"
+                    : isTamil ? "வழிகளுக்குப் பொருத்து" : "Fit to Routes"}
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
                   iconLeft={RefreshCw}
                   onClick={handleResetView}
+                  className="btn-hover"
                 >
-                  Reset Center
+                  {isTamil ? "மைய மீட்டமை" : "Reset Center"}
                 </Button>
               </>
             )}
@@ -468,16 +479,20 @@ export default function LiveMapPage() {
             <div className="p-3.5 rounded-xl bg-glass border border-glass-border flex flex-wrap items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-4">
                 <span className="flex items-center gap-1.5 text-slate-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-safe" /> On Time (1)
+                  <span className="w-2.5 h-2.5 rounded-full bg-safe" />
+                  {isTamil ? "சரியான நேரம் (1)" : "On Time (1)"}
                 </span>
                 <span className="flex items-center gap-1.5 text-slate-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-danger animate-pulse" /> Delayed / Med (1)
+                  <span className="w-2.5 h-2.5 rounded-full bg-danger animate-pulse" />
+                  {isTamil ? "தாமதம் / மருத்துவம் (1)" : "Delayed / Med (1)"}
                 </span>
                 <span className="flex items-center gap-1.5 text-slate-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-warn" /> At Risk (1)
+                  <span className="w-2.5 h-2.5 rounded-full bg-warn" />
+                  {isTamil ? "ஆபத்தில் (1)" : "At Risk (1)"}
                 </span>
                 <span className="flex items-center gap-1.5 text-slate-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-slate-400" /> Idle (1)
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
+                  {isTamil ? "செயலற்றது (1)" : "Idle (1)"}
                 </span>
               </div>
 
@@ -485,7 +500,7 @@ export default function LiveMapPage() {
                 <div className="flex items-center gap-1.5 text-cyan-400 font-mono">
                   <MapPin className="w-3.5 h-3.5" />
                   <span>
-                    Clicked: {lastClickedPoint.lat.toFixed(5)}°N, {lastClickedPoint.lng.toFixed(5)}°E
+                    {isTamil ? "கிளிக் செய்யப்பட்டது:" : "Clicked:"} {lastClickedPoint.lat.toFixed(5)}°N, {lastClickedPoint.lng.toFixed(5)}°E
                   </span>
                 </div>
               )}
@@ -499,78 +514,101 @@ export default function LiveMapPage() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-bold text-white flex items-center gap-2">
                   <Truck className="w-4 h-4 text-cyan-400" />
-                  Live Fleet (Public Anonymised)
+                  {isTamil ? "நேரடி கடற்படை (பெயர் மறைக்கப்பட்டது)" : "Live Fleet (Public Anonymised)"}
                 </h2>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-mono">
-                  {vehicles.length} Units
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-300 border border-cyan-500/20 font-mono font-bold">
+                  {vehicles.length} {isTamil ? "வாகனங்கள்" : "Units"}
                 </span>
               </div>
-              <p className="text-[10px] text-slate-400 mb-3">
-                Identities & registrations anonymised for public view. Full telemetry available in Admin Dispatch.
+              <p className="text-[10px] text-slate-400 mb-3 leading-relaxed">
+                {isTamil
+                  ? "பொது பார்வைக்காக அடையாளங்கள் மறைக்கப்பட்டுள்ளன. முழு தொலை அளவியல் நிர்வாக கட்டுப்பாட்டில் கிடைக்கும்."
+                  : "Identities & registrations anonymised for public view. Full telemetry available in Admin Dispatch."}
               </p>
 
               <div className="flex flex-col gap-2.5">
-                {vehicles.map((v) => {
-                  const isSelected = selectedUid === v.uid;
-                  const path = pathsRef.current[v.routeTarget];
-                  const totalKm = path ? (path.totalDistance / 1000).toFixed(1) : "0";
-                  const currKm = v.currentDistM ? (v.currentDistM / 1000).toFixed(1) : "0";
+                {loadingRoutes ? (
+                  <div className="space-y-2.5">
+                    {[1, 2, 3].map((i) => (
+                      <div key={i} className="p-3 rounded-xl border border-glass-border bg-white/5 space-y-2 animate-pulse">
+                        <div className="flex justify-between items-center">
+                          <Skeleton width="100px" height="14px" />
+                          <Skeleton width="50px" height="12px" />
+                        </div>
+                        <Skeleton width="130px" height="11px" />
+                        <Skeleton width="75%" height="10px" />
+                      </div>
+                    ))}
+                  </div>
+                ) : vehicles.length === 0 ? (
+                  <EmptyState
+                    icon={Truck}
+                    title={isTamil ? "வாகனங்கள் இல்லை" : "No Active Fleet"}
+                    description={isTamil ? "தற்போது தொலை அளவியல் அனுப்பும் வாகனங்கள் இல்லை." : "No vehicles currently reporting live road telemetry."}
+                  />
+                ) : (
+                  vehicles.map((v) => {
+                    const isSelected = selectedUid === v.uid;
+                    const path = pathsRef.current[v.routeTarget];
+                    const totalKm = path ? (path.totalDistance / 1000).toFixed(1) : "0";
+                    const currKm = v.currentDistM ? (v.currentDistM / 1000).toFixed(1) : "0";
 
-                  return (
-                    <button
-                      key={v.uid}
-                      type="button"
-                      onClick={() => handleSelectVehicle(v)}
-                      className={`w-full text-left p-3 rounded-xl border transition-all ${
-                        isSelected
-                          ? "bg-primary/20 border-cyan-400 shadow-md shadow-cyan-500/10"
-                          : "bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/10"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-xs text-white">
-                            {v.name}
-                          </span>
-                          {v.isEmergency && (
-                            <span className="text-xs">
-                              {v.priority === "medical" ? "🏥" : "🍱"}
+                    return (
+                      <button
+                        key={v.uid}
+                        type="button"
+                        onClick={() => handleSelectVehicle(v)}
+                        className={`w-full text-left p-3 rounded-xl border transition-all interactive-hover ${
+                          isSelected
+                            ? "bg-primary/20 border-cyan-400 shadow-md shadow-cyan-500/10"
+                            : "bg-white/5 border-white/5 hover:bg-white/10 hover:border-white/10"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-xs text-white">
+                              {v.name}
                             </span>
-                          )}
+                            {v.isEmergency && (
+                              <span className="text-xs">
+                                {v.priority === "medical" ? "🏥" : "🍱"}
+                              </span>
+                            )}
+                          </div>
+                          <span
+                            className={`text-[10px] font-mono uppercase px-1.5 py-0.2 rounded font-semibold ${
+                              v.status === "on_time"
+                                ? "bg-safe/20 text-safe"
+                                : v.status === "delayed"
+                                ? "bg-danger/20 text-danger"
+                                : v.status === "at_risk"
+                                ? "bg-warn/20 text-warn"
+                                : "bg-slate-500/20 text-slate-300"
+                            }`}
+                          >
+                            {v.status}
+                          </span>
                         </div>
-                        <span
-                          className={`text-[10px] font-mono uppercase px-1.5 py-0.2 rounded font-semibold ${
-                            v.status === "on_time"
-                              ? "bg-safe/20 text-safe"
-                              : v.status === "delayed"
-                              ? "bg-danger/20 text-danger"
-                              : v.status === "at_risk"
-                              ? "bg-warn/20 text-warn"
-                              : "bg-slate-500/20 text-slate-300"
-                          }`}
-                        >
-                          {v.status}
-                        </span>
-                      </div>
 
-                      <div className="flex items-center justify-between text-[11px] text-muted font-mono mt-1">
-                        <span>{v.vehicleNumber}</span>
-                        <span>Heading: {Math.round(v.heading || 0)}°</span>
-                      </div>
-
-                      <div className="text-[10px] text-slate-300 mt-1 truncate">
-                        {v.cargoType}
-                      </div>
-
-                      {path && v.speedKmh > 0 && (
-                        <div className="mt-2 pt-1.5 border-t border-white/10 flex items-center justify-between text-[10px] font-mono text-cyan-300">
-                          <span>Road: {currKm} / {totalKm} km</span>
-                          <span>Speed: {v.speedKmh} km/h (x8)</span>
+                        <div className="flex items-center justify-between text-[11px] text-muted font-mono mt-1">
+                          <span>{v.vehicleNumber}</span>
+                          <span>{isTamil ? "திசை:" : "Heading:"} {Math.round(v.heading || 0)}°</span>
                         </div>
-                      )}
-                    </button>
-                  );
-                })}
+
+                        <div className="text-[10px] text-slate-300 mt-1 truncate">
+                          {v.cargoType}
+                        </div>
+
+                        {path && v.speedKmh > 0 && (
+                          <div className="mt-2 pt-1.5 border-t border-white/10 flex items-center justify-between text-[10px] font-mono text-cyan-300">
+                            <span>{isTamil ? "சாலை:" : "Road:"} {currKm} / {totalKm} km</span>
+                            <span>{isTamil ? "வேகம்:" : "Speed:"} {v.speedKmh} km/h (x8)</span>
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </div>
 
@@ -579,31 +617,48 @@ export default function LiveMapPage() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-bold text-white flex items-center gap-2">
                   <Layers className="w-4 h-4 text-primary" />
-                  Active Road Corridors
+                  {isTamil ? "செயலில் உள்ள சாலை வழிகள்" : "Active Road Corridors"}
                 </h2>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-400 font-mono font-bold">
-                  {routes.length} Active
+                  {routes.length} {isTamil ? "வழிகள்" : "Active"}
                 </span>
               </div>
 
               <div className="flex flex-col gap-2">
-                {routes.map((r) => (
-                  <div
-                    key={r.id}
-                    className="p-2.5 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between text-xs"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: r.color }}
-                      />
-                      <span className="text-white font-medium">{r.label}</span>
-                    </div>
-                    <span className="text-[10px] font-mono text-muted">
-                      {r.coords.length} pts
-                    </span>
+                {loadingRoutes ? (
+                  <div className="space-y-2">
+                    {[1, 2].map((i) => (
+                      <div key={i} className="p-2.5 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between animate-pulse">
+                        <Skeleton width="120px" height="12px" />
+                        <Skeleton width="45px" height="10px" />
+                      </div>
+                    ))}
                   </div>
-                ))}
+                ) : routes.length === 0 ? (
+                  <EmptyState
+                    icon={Layers}
+                    title={isTamil ? "வழிகள் இல்லை" : "No Corridors"}
+                    description={isTamil ? "தற்போது கணக்கிடப்பட்ட சாலை வழிகள் எதுவும் இல்லை." : "No active road corridors currently computed."}
+                  />
+                ) : (
+                  routes.map((r) => (
+                    <div
+                      key={r.id}
+                      className="p-2.5 rounded-xl bg-white/5 border border-white/5 flex items-center justify-between text-xs interactive-hover"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className="w-3 h-3 rounded-full"
+                          style={{ backgroundColor: r.color }}
+                        />
+                        <span className="text-white font-medium">{r.label}</span>
+                      </div>
+                      <span className="text-[10px] font-mono text-muted">
+                        {r.coords.length} pts
+                      </span>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
@@ -612,48 +667,56 @@ export default function LiveMapPage() {
               <div className="flex items-center justify-between mb-3">
                 <h2 className="text-sm font-bold text-white flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 text-warn" />
-                  Marked Coimbatore Hazards
+                  {isTamil ? "குறிக்கப்பட்ட கோவை அபாயங்கள்" : "Marked Coimbatore Hazards"}
                 </h2>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-danger/20 text-danger font-mono font-bold">
-                  {SAMPLE_HAZARDS.length} Active
+                  {SAMPLE_HAZARDS.length} {isTamil ? "செயலில்" : "Active"}
                 </span>
               </div>
 
               <div className="flex flex-col gap-2">
-                {SAMPLE_HAZARDS.map((h) => {
-                  let icon = "🚧";
-                  let tagColor = "text-danger bg-danger/20";
-                  if (h.type === "landslide") {
-                    icon = "⛰️";
-                    tagColor = "text-warn bg-warn/20";
-                  } else if (h.type === "rain") {
-                    icon = "🌧️";
-                    tagColor = "text-cyan-400 bg-cyan-400/20";
-                  }
+                {SAMPLE_HAZARDS.length === 0 ? (
+                  <EmptyState
+                    icon={AlertTriangle}
+                    title={isTamil ? "அபாயங்கள் இல்லை" : "No Active Hazards"}
+                    description={isTamil ? "அனைத்து கோவை வழித்தடங்களும் தடையின்றி இயங்குகின்றன." : "All corridors are operating without reported road hazards."}
+                  />
+                ) : (
+                  SAMPLE_HAZARDS.map((h) => {
+                    let icon = "🚧";
+                    let tagColor = "text-danger bg-danger/20";
+                    if (h.type === "landslide") {
+                      icon = "⛰️";
+                      tagColor = "text-warn bg-warn/20";
+                    } else if (h.type === "rain") {
+                      icon = "🌧️";
+                      tagColor = "text-cyan-400 bg-cyan-400/20";
+                    }
 
-                  return (
-                    <div
-                      key={h.id}
-                      className="p-2.5 rounded-xl bg-white/5 border border-white/5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-white flex items-center gap-1.5">
-                          <span>{icon}</span>
-                          <span className="capitalize">{h.type}</span>
-                        </span>
-                        <span className={`text-[10px] font-mono uppercase px-1.5 py-0.2 rounded font-bold ${tagColor}`}>
-                          {h.severity}
-                        </span>
+                    return (
+                      <div
+                        key={h.id}
+                        className="p-2.5 rounded-xl bg-white/5 border border-white/5 interactive-hover"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                            <span>{icon}</span>
+                            <span className="capitalize">{h.type}</span>
+                          </span>
+                          <span className={`text-[10px] font-mono uppercase px-1.5 py-0.2 rounded font-bold ${tagColor}`}>
+                            {h.severity}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-muted mt-1 leading-snug">
+                          {h.note}
+                        </p>
+                        <div className="text-[10px] text-slate-400 font-mono mt-1">
+                          {h.roadName} &bull; {h.radiusM}m radius
+                        </div>
                       </div>
-                      <p className="text-[11px] text-muted mt-1 leading-snug">
-                        {h.note}
-                      </p>
-                      <div className="text-[10px] text-slate-400 font-mono mt-1">
-                        {h.roadName} &bull; {h.radiusM}m radius
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>

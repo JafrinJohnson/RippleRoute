@@ -177,7 +177,7 @@ export default function LandingPage() {
                     icon={MapPin}
                     className="w-full sm:w-auto shadow-glow-cyan font-bold"
                   >
-                    View Live Map
+                    {isTamil ? "நேரடி வரைபடம்" : "View Live Map"}
                   </Button>
                 </Link>
 
@@ -199,19 +199,19 @@ export default function LandingPage() {
                   <span className="text-xl sm:text-2xl font-black font-heading text-text">
                     &lt; 2s
                   </span>
-                  <p className="text-[11px] text-muted">Hazard Broadcast</p>
+                  <p className="text-[11px] text-muted">{isTamil ? "அபாய ஒளிபரப்பு" : "Hazard Broadcast"}</p>
                 </div>
                 <div>
                   <span className="text-xl sm:text-2xl font-black font-heading text-cyan">
                     128
                   </span>
-                  <p className="text-[11px] text-muted">QPSO Swarm Vectors</p>
+                  <p className="text-[11px] text-muted">{isTamil ? "QPSO திரள் வழிகள்" : "QPSO Swarm Vectors"}</p>
                 </div>
                 <div>
                   <span className="text-xl sm:text-2xl font-black font-heading text-safe">
                     100%
                   </span>
-                  <p className="text-[11px] text-muted">Direct SMS Delivery</p>
+                  <p className="text-[11px] text-muted">{isTamil ? "நேரடி SMS விநியோகம்" : "Direct SMS Delivery"}</p>
                 </div>
               </div>
             </motion.div>
@@ -1024,15 +1024,19 @@ export default function LandingPage() {
                 <div>
                   <div className="flex items-center gap-2 mb-1.5">
                     <Badge variant="safe" size="sm" pulse>
-                      1-CLICK EVALUATION
+                      {isTamil ? "1-கிளிக் சோதனை" : "1-CLICK EVALUATION"}
                     </Badge>
-                    <span className="text-xs text-muted font-mono">No Credentials Required</span>
+                    <span className="text-xs text-muted font-mono">
+                      {isTamil ? "சான்றுகள் தேவையில்லை" : "No Credentials Required"}
+                    </span>
                   </div>
                   <h3 className="text-xl sm:text-2xl font-bold font-heading text-text">
-                    Try the Demo Cockpits
+                    {isTamil ? "டெமோ கட்டுப்பாட்டு அறைகள்" : "Try the Demo Cockpits"}
                   </h3>
                   <p className="text-xs sm:text-sm text-muted mt-1 max-w-xl leading-relaxed">
-                    Instantly enter live mission control with pre-seeded KovaiSwift profiles: Operations Admin, Fleet Driver, or Priority Emergency Transit.
+                    {isTamil
+                      ? "முன் கட்டமைக்கப்பட்ட KovaiSwift சுயவிவரங்களுடன் நேரடி மிஷன் கட்டுப்பாட்டுக்குள் நுழையுங்கள்: செயல்பாட்டு நிர்வாகி, வாகன ஓட்டுநர், அல்லது அவசரப் போக்குவரத்து."
+                      : "Instantly enter live mission control with pre-seeded KovaiSwift profiles: Operations Admin, Fleet Driver, or Priority Emergency Transit."}
                   </p>
                 </div>
 
@@ -1044,7 +1048,7 @@ export default function LandingPage() {
                     onClick={() => handleDemoLogin("admin", "/admin")}
                     className="flex-1 sm:flex-none shadow-glow font-bold"
                   >
-                    Enter as Admin
+                    {isTamil ? "நிர்வாகியாக நுழைக" : "Enter as Admin"}
                   </Button>
                   <Button
                     variant="secondary"
@@ -1053,7 +1057,7 @@ export default function LandingPage() {
                     onClick={() => handleDemoLogin("driver", "/driver")}
                     className="flex-1 sm:flex-none hover:border-cyan/50 text-cyan-400 font-bold"
                   >
-                    Enter as Driver
+                    {isTamil ? "ஓட்டுநராக நுழைக" : "Enter as Driver"}
                   </Button>
                   <Button
                     variant="danger"
@@ -1062,7 +1066,7 @@ export default function LandingPage() {
                     onClick={() => handleDemoLogin("emergency", "/emergency")}
                     className="flex-1 sm:flex-none shadow-glow-danger font-bold"
                   >
-                    Enter as Emergency
+                    {isTamil ? "அவசரப்பிரிவாக நுழைக" : "Enter as Emergency"}
                   </Button>
                 </div>
               </div>

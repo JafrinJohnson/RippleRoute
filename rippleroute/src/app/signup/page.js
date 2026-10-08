@@ -35,7 +35,7 @@ function SignupFormContent() {
   const router = useRouter();
   const initialRole = searchParams.get("role") || "admin";
 
-  const { t } = useLanguage();
+  const { t, isTamil } = useLanguage();
   const { signup, loading } = useAuth();
   const { toast } = useToast();
 
@@ -450,45 +450,57 @@ function SignupFormContent() {
                 <button
                   type="button"
                   onClick={() => setPriority("Medical – oxygen/medicines")}
-                  className={`p-3 rounded-2xl border text-left flex flex-col gap-1.5 transition-all ${
+                  className={`p-3 rounded-2xl border text-left flex flex-col gap-1.5 transition-all interactive-hover ${
                     priority === "Medical – oxygen/medicines"
                       ? "bg-pink/20 border-pink shadow-glow-pink"
                       : "bg-glass border-glass-border hover:bg-white/5"
                   }`}
                 >
                   <HeartPulse className="w-5 h-5 text-pink" />
-                  <span className="text-xs font-bold text-text">Medical</span>
-                  <span className="text-[10px] text-muted">Oxygen & medicines</span>
+                  <span className="text-xs font-bold text-text">
+                    {isTamil ? "மருத்துவம்" : "Medical"}
+                  </span>
+                  <span className="text-[10px] text-muted">
+                    {isTamil ? "ஆக்சிஜன் & மருந்துகள்" : "Oxygen & medicines"}
+                  </span>
                 </button>
 
                 {/* Food */}
                 <button
                   type="button"
                   onClick={() => setPriority("Food – perishables")}
-                  className={`p-3 rounded-2xl border text-left flex flex-col gap-1.5 transition-all ${
+                  className={`p-3 rounded-2xl border text-left flex flex-col gap-1.5 transition-all interactive-hover ${
                     priority === "Food – perishables"
                       ? "bg-safe/20 border-safe shadow-glow-safe"
                       : "bg-glass border-glass-border hover:bg-white/5"
                   }`}
                 >
                   <Truck className="w-5 h-5 text-safe" />
-                  <span className="text-xs font-bold text-text">Food</span>
-                  <span className="text-[10px] text-muted">Perishables</span>
+                  <span className="text-xs font-bold text-text">
+                    {isTamil ? "உணவு" : "Food"}
+                  </span>
+                  <span className="text-[10px] text-muted">
+                    {isTamil ? "அழுகக்கூடிய பொருட்கள்" : "Perishables"}
+                  </span>
                 </button>
 
                 {/* Other Urgent */}
                 <button
                   type="button"
                   onClick={() => setPriority("Other urgent")}
-                  className={`p-3 rounded-2xl border text-left flex flex-col gap-1.5 transition-all ${
+                  className={`p-3 rounded-2xl border text-left flex flex-col gap-1.5 transition-all interactive-hover ${
                     priority === "Other urgent"
                       ? "bg-cyan/20 border-cyan shadow-glow-cyan"
                       : "bg-glass border-glass-border hover:bg-white/5"
                   }`}
                 >
                   <Flame className="w-5 h-5 text-cyan" />
-                  <span className="text-xs font-bold text-text">Other</span>
-                  <span className="text-[10px] text-muted">Urgent courier</span>
+                  <span className="text-xs font-bold text-text">
+                    {isTamil ? "மற்றவை" : "Other"}
+                  </span>
+                  <span className="text-[10px] text-muted">
+                    {isTamil ? "அவசர தூதஞ்சல்" : "Urgent courier"}
+                  </span>
                 </button>
               </div>
             </div>

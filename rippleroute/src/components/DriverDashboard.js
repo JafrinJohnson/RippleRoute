@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { useLanguage } from "@/context/LanguageContext";
 import { useTheme } from "@/context/ThemeContext";
-import { GlassCard, Button, Badge, Drawer, useToast } from "@/components/ui";
+import { GlassCard, Button, Badge, Drawer, Skeleton, EmptyState, useToast } from "@/components/ui";
 import FleetMap from "@/components/map";
 import {
   DEPOT_PEELAMEDU,
@@ -84,6 +84,7 @@ export default function DriverDashboard({ mode = "driver" }) {
   const [activeHazardAlert, setActiveHazardAlert] = useState(null);
 
   // State: Position & Telemetry
+  const [startLocationType, setStartLocationType] = useState("depot"); // "depot" | "gps"
   const [currentPosition, setCurrentPosition] = useState({
     lat: DEPOT_PEELAMEDU.lat,
     lng: DEPOT_PEELAMEDU.lng,
@@ -100,6 +101,50 @@ export default function DriverDashboard({ mode = "driver" }) {
   const [isPlanningRoutes, setIsPlanningRoutes] = useState(false);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [qarsResult, setQarsResult] = useState(null);
+  const [bestRouteBoundsCoords, setBestRouteBoundsCoords] = useState(null);
+
+  // Toggle Start Location: Depot vs Browser GPS
+  const handleToggleStartLocation = useCallback((type) => {
+    setStartLocationType(type);
+    if (type === "depot") {
+      setCurrentPosition({ lat: DEPOT_PEELAMEDU.lat, lng: DEPOT_PEELAMEDU.lng });
+      toast.info(
+        locale === "ta"
+          ? "தொடக்க இடம்: கோவைஸ்விப்ட் டிப்போ, பீளமேடு"
+          : "Start point: KovaiSwift Depot, Peelamedu"
+      );
+    } else if (type === "gps") {
+      if (typeof window !== "undefined" && navigator?.geolocation) {
+        toast.info(locale === "ta" ? "GPS கண்டறியப்படுகிறது..." : "Acquiring browser GPS...");
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            setCurrentPosition({ lat, lng });
+            toast.success(
+              locale === "ta"
+                ? "உங்கள் ஜிபிஎஸ் இருப்பிடம் அமைக்கப்பட்டது"
+                : `Acquired GPS location: [${lat.toFixed(4)}, ${lng.toFixed(4)}]`
+            );
+          },
+          (err) => {
+            console.warn("GPS error:", err?.message || err);
+            toast.warning(
+              locale === "ta"
+                ? "GPS கிடைக்கவில்லை — டிப்போ இருப்பிடம் தொடர்கிறது"
+                : "Could not access GPS — keeping Depot as start point"
+            );
+            setStartLocationType("depot");
+            setCurrentPosition({ lat: DEPOT_PEELAMEDU.lat, lng: DEPOT_PEELAMEDU.lng });
+          },
+          { enableHighAccuracy: true, timeout: 8000 }
+        );
+      } else {
+        toast.warning("Browser Geolocation is not supported");
+        setStartLocationType("depot");
+      }
+    }
+  }, [locale, toast]);
 
   // State: Safety & Advisory
   const [advisoryLines, setAdvisoryLines] = useState({ en: [], ta: [] });
@@ -348,11 +393,14 @@ export default function DriverDashboard({ mode = "driver" }) {
 
       setQarsResult(res);
 
-      // Find index of best route
+      // Find index of best route and set route bounds to fit map view
       if (res.best) {
         const bestIdx = plannedRoutes.findIndex((r) => r.id === res.best.id);
         if (bestIdx !== -1) {
           setSelectedRouteIndex(bestIdx);
+        }
+        if (Array.isArray(res.best.coords) && res.best.coords.length > 1) {
+          setBestRouteBoundsCoords(res.best.coords);
         }
       }
 
@@ -526,7 +574,7 @@ export default function DriverDashboard({ mode = "driver" }) {
   const mapRoutes = useMemo(() => {
     if (!plannedRoutes.length) return [];
 
-    const ROUTE_COLORS = ["#00E5FF", "#F59E0B", "#A855F7"];
+    const ROUTE_COLORS = ["#00E5FF", "#A855F7", "#F59E0B"]; // Cyan, Violet, Amber
 
     // If QARS has optimized, show the best route glowing, and fade others
     if (qarsResult?.best) {
@@ -535,34 +583,34 @@ export default function DriverDashboard({ mode = "driver" }) {
         return {
           id: r.id,
           coords: r.coords,
-          color: isBest ? (isEmergency ? "#EF4444" : "#10B981") : ROUTE_COLORS[idx % ROUTE_COLORS.length],
+          color: isBest ? (isEmergency ? "#EF4444" : "#00E5FF") : ROUTE_COLORS[idx % ROUTE_COLORS.length],
           isHighlighted: isBest,
-          isDashed: !isBest,
+          isDashed: true,
           snappedStart: r.snappedStart,
           snappedEnd: r.snappedEnd,
-          fromCoords: r.fromCoords || [DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng],
+          fromCoords: r.fromCoords || [currentPosition.lat, currentPosition.lng],
           toCoords: r.toCoords || (selectedDelivery ? [selectedDelivery.lat, selectedDelivery.lng] : null),
           label: isBest
             ? `${isEmergency ? "🚨 Emergency Bypass" : "⚡ QARS Optimal"} • ${Math.round(r.distanceM / 1000)} km`
-            : `Alt ${idx + 1} • ${Math.round(r.distanceM / 1000)} km`,
+            : `${r.label || `Route ${String.fromCharCode(65 + idx)}`} • ${Math.round(r.distanceM / 1000)} km`,
         };
       });
     }
 
-    // Default candidate routes
+    // Default candidate routes: Route A (cyan), Route B (violet), Route C (amber), all dashed
     return plannedRoutes.map((r, idx) => ({
       id: r.id,
       coords: r.coords,
-      color: ROUTE_COLORS[idx % ROUTE_COLORS.length],
+      color: r.color || ROUTE_COLORS[idx % ROUTE_COLORS.length],
       isHighlighted: idx === selectedRouteIndex,
       isDashed: true,
       snappedStart: r.snappedStart,
       snappedEnd: r.snappedEnd,
-      fromCoords: r.fromCoords || [DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng],
+      fromCoords: r.fromCoords || [currentPosition.lat, currentPosition.lng],
       toCoords: r.toCoords || (selectedDelivery ? [selectedDelivery.lat, selectedDelivery.lng] : null),
-      label: `Route ${String.fromCharCode(65 + idx)} • ${Math.round(r.distanceM / 1000)} km • ${Math.round(r.durationS / 60)} min`,
+      label: `${r.label || `Route ${String.fromCharCode(65 + idx)}`} • ${Math.round(r.distanceM / 1000)} km • ${Math.round(r.durationS / 60)} min`,
     }));
-  }, [plannedRoutes, qarsResult, selectedRouteIndex, isEmergency, selectedDelivery]);
+  }, [plannedRoutes, qarsResult, selectedRouteIndex, isEmergency, selectedDelivery, currentPosition]);
 
   // Vehicles list for FleetMap (Privacy by role: ONLY the logged-in user's own vehicle)
   const mapVehicles = useMemo(() => {
@@ -706,10 +754,11 @@ export default function DriverDashboard({ mode = "driver" }) {
             routes={mapRoutes}
             hazards={hazards}
             deliveries={deliveries}
-            selectedUid={profile?.uid || "driver-me"}
+            selectedUid={profile?.uid || profile?.driverId || "my-truck"}
             height="100%"
             showDepot={true}
             depotCoords={[DEPOT_PEELAMEDU.lat, DEPOT_PEELAMEDU.lng]}
+            fitBoundsCoords={bestRouteBoundsCoords}
           />
 
           {/* Simulation & Telemetry Floating Bar on Map */}
@@ -758,13 +807,15 @@ export default function DriverDashboard({ mode = "driver" }) {
           <div className="w-12 h-1 bg-white/20 rounded-full mx-auto lg:hidden -mt-1 mb-1" />
 
           {/* SECTION 1: Driver Cockpit Header */}
-          <div className={`p-4 rounded-2xl bg-white/[0.03] border ${accentBorder} relative overflow-hidden`}>
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="text-[11px] font-mono uppercase tracking-wider text-slate-400">
-                  {isEmergency ? "Priority Corridors Enabled" : "Active Vehicle Unit"}
+          <div className={`p-4 sm:p-5 rounded-2xl bg-white/[0.03] border ${accentBorder} relative min-h-fit h-auto flex flex-col gap-3.5`}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <span className="text-[11px] font-mono uppercase tracking-wider text-slate-400 block break-words leading-tight">
+                  {isEmergency
+                    ? (locale === "ta" ? "முன்னுரிமை வழித்தடங்கள் இயக்கப்பட்டுள்ளன" : "PRIORITY CORRIDORS ENABLED")
+                    : (locale === "ta" ? "செயலில் உள்ள வாகனப் பிரிவு" : "ACTIVE VEHICLE UNIT")}
                 </span>
-                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2 mt-1">
                   {profile?.vehicleNumber || "TN-37-BY-4512"}
                   {isEmergency && (
                     <span className="text-base" title="Emergency Priority Cargo">
@@ -773,17 +824,55 @@ export default function DriverDashboard({ mode = "driver" }) {
                   )}
                 </h2>
               </div>
-              <div className="text-right">
-                <span className="text-[11px] text-slate-400 block font-mono">Current Status</span>
-                <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1 justify-end">
+              <div className="text-right flex-shrink-0">
+                <span className="text-[11px] text-slate-400 block font-mono">
+                  {locale === "ta" ? "நிலை" : "Status"}
+                </span>
+                <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1 justify-end mt-0.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping inline-block" />
                   {tripStatus.toUpperCase()}
                 </span>
               </div>
             </div>
 
+            {/* Start Point Toggle: Depot | My GPS */}
+            <div className="flex items-center justify-between p-2 rounded-xl bg-black/40 border border-white/5 text-xs">
+              <span className="text-slate-300 font-medium text-[11px] flex items-center gap-1.5">
+                <Compass className="w-3.5 h-3.5 text-cyan-400" />
+                <span>{locale === "ta" ? "தொடக்க இடம்:" : "Start from:"}</span>
+              </span>
+              <div className="inline-flex p-0.5 rounded-lg bg-white/5 border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => handleToggleStartLocation("depot")}
+                  className={`px-2.5 py-1 rounded-md font-semibold text-[11px] transition-all ${
+                    startLocationType === "depot"
+                      ? isEmergency
+                        ? "bg-red-500 text-white shadow-sm"
+                        : "bg-cyan-500 text-slate-950 shadow-sm"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  {locale === "ta" ? "டிப்போ" : "Depot"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleToggleStartLocation("gps")}
+                  className={`px-2.5 py-1 rounded-md font-semibold text-[11px] transition-all ${
+                    startLocationType === "gps"
+                      ? isEmergency
+                        ? "bg-red-500 text-white shadow-sm"
+                        : "bg-cyan-500 text-slate-950 shadow-sm"
+                      : "text-slate-400 hover:text-white"
+                  }`}
+                >
+                  {locale === "ta" ? "என் ஜிபிஎஸ்" : "My GPS"}
+                </button>
+              </div>
+            </div>
+
             {/* Quick Trip Controls */}
-            <div className="grid grid-cols-2 gap-2 mt-4">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={handleStartTrip}
                 disabled={tripStatus === "in_transit"}
@@ -794,7 +883,7 @@ export default function DriverDashboard({ mode = "driver" }) {
                 }`}
               >
                 <Play className="w-3.5 h-3.5" />
-                <span>Start Trip</span>
+                <span>{locale === "ta" ? "பயணத்தை தொடங்கு" : "Start Trip"}</span>
               </button>
 
               <button
@@ -807,7 +896,7 @@ export default function DriverDashboard({ mode = "driver" }) {
                 }`}
               >
                 <CheckCircle className="w-3.5 h-3.5" />
-                <span>Mark Delivered</span>
+                <span>{locale === "ta" ? "டெலிவரி முடிந்தது" : "Mark Delivered"}</span>
               </button>
             </div>
           </div>
@@ -829,70 +918,94 @@ export default function DriverDashboard({ mode = "driver" }) {
             </div>
 
             <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
-              {sortedDeliveries.map((del) => {
-                const isSelected = selectedDelivery?.id === del.id;
-                const isMed = del.priority === "medical";
-                const isFood = del.priority === "food";
-
-                return (
-                  <div
-                    key={del.id}
-                    onClick={() => {
-                      setSelectedDelivery(del);
-                      setTripStatus(del.status || "open");
-                    }}
-                    className={`p-3 rounded-xl border transition-all cursor-pointer text-left flex items-start justify-between gap-3 ${
-                      isSelected
-                        ? isEmergency
-                          ? "bg-red-500/15 border-red-500 shadow-md"
-                          : "bg-cyan-500/15 border-cyan-400 shadow-md"
-                        : "bg-white/[0.02] hover:bg-white/[0.06] border-glass-border"
-                    }`}
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="font-mono text-xs font-bold text-white">{del.code}</span>
-                        {isMed && (
-                          <span className="px-1.5 py-0.2 rounded text-[10px] bg-red-500/20 text-red-300 border border-red-500/30 flex items-center gap-0.5">
-                            <HeartPulse className="w-3 h-3 text-red-400" />
-                            <span>Medical</span>
-                          </span>
-                        )}
-                        {isFood && (
-                          <span className="px-1.5 py-0.2 rounded text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-0.5">
-                            <UtensilsCrossed className="w-3 h-3 text-amber-400" />
-                            <span>Perishable</span>
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs font-medium text-slate-200 mt-1 truncate">
-                        {del.customerName}
-                      </div>
-                      <div className="text-[11px] text-slate-400 truncate">
-                        {del.address}
-                      </div>
-                      <div className="text-[11px] text-cyan-400 font-mono mt-0.5">
-                        📦 {del.cargo}
-                      </div>
+              {loadingDeliveries ? (
+                [1, 2, 3].map((n) => (
+                  <div key={n} className="p-3 rounded-xl border border-glass-border bg-white/[0.02] flex items-center justify-between gap-3">
+                    <div className="flex-1 space-y-1.5">
+                      <Skeleton className="h-4 w-24" />
+                      <Skeleton className="h-3.5 w-36" />
+                      <Skeleton className="h-3 w-28" />
                     </div>
-
-                    <div className="text-right flex flex-col items-end justify-between self-stretch">
-                      <span className="text-[11px] font-mono text-slate-400">{del.etaText}</span>
-                      <span
-                        className={`text-[10px] uppercase font-mono px-1.5 py-0.5 rounded ${
-                          del.status === "delivered"
-                            ? "bg-emerald-500/20 text-emerald-300"
-                            : del.status === "in_transit"
-                            ? "bg-cyan-500/20 text-cyan-300"
-                            : "bg-slate-800 text-slate-300"
-                        }`}
-                      >
-                        {del.status}
-                      </span>
-                    </div>
+                    <Skeleton className="h-6 w-16 rounded-md" />
                   </div>
-                );
-              })}
+                ))
+              ) : sortedDeliveries.length === 0 ? (
+                <EmptyState
+                  icon={Package}
+                  title={locale === "ta" ? "விநியோகங்கள் எதுவும் இல்லை" : "No Deliveries Assigned"}
+                  description={
+                    locale === "ta"
+                      ? "தற்போது உங்களுக்கு எந்த விநியோகப் பணிகளும் ஒதுக்கப்படவில்லை."
+                      : "No shipment drops currently queued for your unit."
+                  }
+                  compact
+                />
+              ) : (
+                sortedDeliveries.map((del) => {
+                  const isSelected = selectedDelivery?.id === del.id;
+                  const isMed = del.priority === "medical";
+                  const isFood = del.priority === "food";
+
+                  return (
+                    <div
+                      key={del.id}
+                      onClick={() => {
+                        setSelectedDelivery(del);
+                        setTripStatus(del.status || "open");
+                      }}
+                      className={`p-3 rounded-xl border transition-all cursor-pointer text-left flex items-start justify-between gap-3 ${
+                        isSelected
+                          ? isEmergency
+                            ? "bg-red-500/15 border-red-500 shadow-md"
+                            : "bg-cyan-500/15 border-cyan-400 shadow-md"
+                          : "bg-white/[0.02] hover:bg-white/[0.06] border-glass-border"
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono text-xs font-bold text-white">{del.code}</span>
+                          {isMed && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] bg-red-500/20 text-red-300 border border-red-500/30 flex items-center gap-0.5">
+                              <HeartPulse className="w-3 h-3 text-red-400" />
+                              <span>{locale === "ta" ? "மருத்துவம்" : "Medical"}</span>
+                            </span>
+                          )}
+                          {isFood && (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-0.5">
+                              <UtensilsCrossed className="w-3 h-3 text-amber-400" />
+                              <span>{locale === "ta" ? "அழுகும் பொருள்" : "Perishable"}</span>
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs font-medium text-slate-200 mt-1 truncate">
+                          {del.customerName}
+                        </div>
+                        <div className="text-[11px] text-slate-400 truncate">
+                          {del.address}
+                        </div>
+                        <div className="text-[11px] text-cyan-400 font-mono mt-0.5">
+                          📦 {del.cargo}
+                        </div>
+                      </div>
+
+                      <div className="text-right flex flex-col items-end justify-between self-stretch">
+                        <span className="text-[11px] font-mono text-slate-400">{del.etaText}</span>
+                        <span
+                          className={`text-[10px] uppercase font-mono px-1.5 py-0.5 rounded ${
+                            del.status === "delivered"
+                              ? "bg-emerald-500/20 text-emerald-300"
+                              : del.status === "in_transit"
+                              ? "bg-cyan-500/20 text-cyan-300"
+                              : "bg-slate-800 text-slate-300"
+                          }`}
+                        >
+                          {del.status}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -901,7 +1014,7 @@ export default function DriverDashboard({ mode = "driver" }) {
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
                 <Navigation className="w-3.5 h-3.5 text-cyan-400" />
-                <span>Candidate Routes</span>
+                <span>{locale === "ta" ? "சாத்தியமான வழித்தடங்கள்" : "Candidate Routes"}</span>
               </h3>
               <button
                 onClick={handlePlanRoute}
@@ -909,12 +1022,25 @@ export default function DriverDashboard({ mode = "driver" }) {
                 className="text-xs text-cyan-400 hover:text-cyan-300 font-medium flex items-center gap-1"
               >
                 <RefreshCw className={`w-3 h-3 ${isPlanningRoutes ? "animate-spin" : ""}`} />
-                <span>Re-plan</span>
+                <span>{locale === "ta" ? "மறு கணக்கீடு" : "Re-plan"}</span>
               </button>
             </div>
 
             {/* Candidate Route Cards */}
-            {plannedRoutes.length === 0 && !isPlanningRoutes ? (
+            {isPlanningRoutes ? (
+              <div className="flex items-stretch gap-2 overflow-x-auto pb-1.5 scrollbar-thin">
+                {[1, 2, 3].map((n) => (
+                  <div key={n} className="flex-1 min-w-[115px] sm:min-w-[125px] p-2.5 rounded-xl border border-glass-border bg-white/[0.02] flex flex-col justify-between flex-shrink-0 gap-2">
+                    <div className="flex items-center justify-between">
+                      <Skeleton className="h-3 w-14" />
+                      <Skeleton className="h-3 w-5 rounded-full" />
+                    </div>
+                    <Skeleton className="h-5 w-12" />
+                    <Skeleton className="h-3 w-16" />
+                  </div>
+                ))}
+              </div>
+            ) : plannedRoutes.length === 0 ? (
               <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-2">
                 <span className="text-xs text-amber-300 font-medium flex items-center gap-1.5">
                   <AlertTriangle className="w-3.5 h-3.5" />
@@ -928,11 +1054,19 @@ export default function DriverDashboard({ mode = "driver" }) {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              <div className="flex items-stretch gap-2 overflow-x-auto pb-1.5 scrollbar-thin">
                 {plannedRoutes.map((route, idx) => {
                   const isSelected = selectedRouteIndex === idx;
                   const km = (route.distanceM / 1000).toFixed(1);
                   const min = Math.round(route.durationS / 60);
+
+                  // Colors: cyan (#00E5FF), violet (#A855F7), amber (#F59E0B)
+                  const routeColor = idx === 0 ? "#00E5FF" : idx === 1 ? "#A855F7" : "#F59E0B";
+                  const selectedStyle = idx === 0
+                    ? "border-cyan-400 bg-cyan-500/20 shadow-md shadow-cyan-500/20"
+                    : idx === 1
+                    ? "border-purple-400 bg-purple-500/20 shadow-md shadow-purple-500/20"
+                    : "border-amber-400 bg-amber-500/20 shadow-md shadow-amber-500/20";
 
                   // Count hazards touching this candidate
                   const hitCount = hazards.filter((h) => {
@@ -947,31 +1081,37 @@ export default function DriverDashboard({ mode = "driver" }) {
                         setSelectedRouteIndex(idx);
                         setQarsResult(null); // Reset optimization if manually picking candidate
                       }}
-                      className={`p-2.5 rounded-xl border text-left transition-all relative ${
+                      className={`flex-1 min-w-[115px] sm:min-w-[125px] p-2.5 rounded-xl border text-left transition-all relative flex flex-col justify-between flex-shrink-0 ${
                         isSelected
-                          ? "bg-cyan-500/20 border-cyan-400 shadow-md"
+                          ? selectedStyle
                           : "bg-white/[0.02] hover:bg-white/[0.05] border-glass-border"
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-bold text-white font-mono">
-                          Route {String.fromCharCode(65 + idx)}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className="w-2 h-2 rounded-full inline-block flex-shrink-0"
+                            style={{ backgroundColor: routeColor }}
+                          />
+                          <span className="text-[11px] font-bold text-white font-mono">
+                            Route {String.fromCharCode(65 + idx)}
+                          </span>
+                        </div>
                         {hitCount > 0 ? (
                           <span className="text-[10px] text-amber-400 flex items-center gap-0.5" title="Hazards on route">
                             <AlertTriangle className="w-3 h-3 text-amber-400" />
                             <span>{hitCount}</span>
                           </span>
                         ) : (
-                          <span className="text-[10px] text-emerald-400" title="Safe corridor">
-                            ✓
+                          <span className="text-[10px] text-emerald-400 font-semibold" title="Safe corridor">
+                            ✓ 0
                           </span>
                         )}
                       </div>
                       <div className="text-sm font-extrabold text-slate-100 mt-1">{min} min</div>
-                      <div className="flex items-center justify-between mt-1">
+                      <div className="flex items-center justify-between gap-1 mt-1">
                         <span className="text-[10px] text-slate-400 font-mono">{km} km</span>
-                        <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-white/10 text-slate-300 border border-white/10">
+                        <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-white/10 text-slate-300 border border-white/10 whitespace-nowrap">
                           Road data: OSM
                         </span>
                       </div>
@@ -1194,17 +1334,20 @@ export default function DriverDashboard({ mode = "driver" }) {
       <Drawer
         isOpen={isChatOpen}
         onClose={() => setIsChatOpen(false)}
-        title="Control Room Dispatch Comms"
-        description="Direct two-way channel with KovaiSwift Logistics management team"
+        title={locale === "ta" ? "கட்டுப்பாட்டு அறை தொடர்பு" : "Control Room Dispatch Comms"}
+        description={locale === "ta" ? "KovaiSwift மேலாண்மை குழுவுடனான இருவழி நேரடி தகவல் தொடர்பு" : "Direct two-way channel with KovaiSwift Logistics management team"}
         position="right"
       >
         <div className="flex flex-col h-[75vh] justify-between">
           {/* Messages List */}
           <div className="flex-1 overflow-y-auto space-y-3 p-2">
             {messages.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 text-xs">
-                <MessageSquare className="w-8 h-8 text-slate-600 mb-2" />
-                <span>No messages yet. Send a quick status update below.</span>
+              <div className="h-full flex items-center justify-center">
+                <EmptyState
+                  icon={MessageSquare}
+                  title={locale === "ta" ? "செய்திகள் இல்லை" : "No Messages Yet"}
+                  description={locale === "ta" ? "கீழே உள்ள விரைவு பதில்கள் அல்லது உரைப்பெட்டி மூலம் நிலவரத்தை அனுப்பவும்." : "Send a quick status update below to reach mission dispatch."}
+                />
               </div>
             ) : (
               messages.map((m) => {
@@ -1234,15 +1377,21 @@ export default function DriverDashboard({ mode = "driver" }) {
 
           {/* Quick Reply Pills */}
           <div className="pt-3 border-t border-glass-border">
-            <div className="text-[10px] font-mono text-slate-400 uppercase mb-2">Quick Replies</div>
+            <div className="text-[10px] font-mono text-slate-400 uppercase mb-2">
+              {locale === "ta" ? "விரைவு பதில்கள்" : "Quick Replies"}
+            </div>
             <div className="flex flex-wrap gap-1.5 mb-3">
-              {["Delayed", "Delivered", "Need help"].map((qr) => (
+              {[
+                { en: "Delayed", ta: "தாமதம்" },
+                { en: "Delivered", ta: "வழங்கப்பட்டது" },
+                { en: "Need help", ta: "உதவி தேவை" },
+              ].map((qr) => (
                 <button
-                  key={qr}
-                  onClick={() => handleSendMessage(qr)}
+                  key={qr.en}
+                  onClick={() => handleSendMessage(locale === "ta" ? qr.ta : qr.en)}
                   className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/15 border border-glass-border text-xs text-slate-200 transition-colors"
                 >
-                  {qr}
+                  {locale === "ta" ? qr.ta : qr.en}
                 </button>
               ))}
             </div>
@@ -1259,7 +1408,7 @@ export default function DriverDashboard({ mode = "driver" }) {
                 type="text"
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Type advisory or status..."
+                placeholder={locale === "ta" ? "செய்தி அல்லது நிலவரத்தை தட்டச்சு செய்க..." : "Type advisory or status..."}
                 className="flex-1 bg-white/5 border border-glass-border rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
               />
               <button

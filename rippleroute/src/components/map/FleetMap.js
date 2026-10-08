@@ -230,26 +230,36 @@ function createDeliveryDivIcon(delivery) {
     emoji = "🍱";
   }
 
+  // Format single-line pill: "🏥 MED-RSP-02" or "📦 GANDHI-01"
+  let shortCode = delivery.code || "DEL";
+  if (shortCode.startsWith("DEL-")) {
+    shortCode = shortCode.slice(4);
+  }
+
   const html = `
-    <div style="position: relative; display: inline-flex; align-items: center; justify-content: center; cursor: pointer;">
+    <div style="position: relative; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; white-space: nowrap !important; width: max-content !important; max-width: none !important; transform: translate(-50%, -50%);">
       <div style="
-        display: flex;
+        display: inline-flex;
         align-items: center;
-        gap: 3px;
-        padding: 3px 6px;
-        border-radius: 6px;
-        background: rgba(15, 23, 42, 0.92);
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: 9999px;
+        background: rgba(15, 23, 42, 0.94);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
         border: 1.5px solid ${color};
-        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+        box-shadow: 0 3px 12px rgba(0, 0, 0, 0.55);
         color: #F8FAFC;
         font-size: 10px;
-        font-weight: 600;
-        font-family: monospace;
+        font-weight: 700;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        white-space: nowrap !important;
+        max-width: none !important;
+        width: auto !important;
+        line-height: 1.2;
       ">
-        <span style="font-size: 11px;">${emoji}</span>
-        <span>${delivery.code || "DEL"}</span>
+        <span style="font-size: 11px; line-height: 1; flex-shrink: 0;">${emoji}</span>
+        <span style="white-space: nowrap !important; flex-shrink: 0;">${shortCode}</span>
       </div>
     </div>
   `;
@@ -257,8 +267,8 @@ function createDeliveryDivIcon(delivery) {
   return L.divIcon({
     className: "ripple-delivery-divicon",
     html,
-    iconSize: [64, 24],
-    iconAnchor: [32, 12],
+    iconSize: [0, 0],
+    iconAnchor: [0, 0],
     popupAnchor: [0, -14],
   });
 }
@@ -402,7 +412,7 @@ function AnimatedVehicleMarker({ vehicle, isSelected, onClick }) {
   return (
     <Marker
       ref={markerRef}
-      position={currentPosRef.current}
+      position={[vehicle.lat, vehicle.lng]}
       icon={icon}
       eventHandlers={{
         click: () => onClick && onClick(vehicle.uid || vehicle.id),
@@ -436,10 +446,32 @@ function AnimatedVehicleMarker({ vehicle, isSelected, onClick }) {
 function FlyToController({ flyTo }) {
   const map = useMap();
   useEffect(() => {
-    if (flyTo && typeof flyTo.lat === "number" && typeof flyTo.lng === "number") {
+    if (!flyTo) return;
+    if (Array.isArray(flyTo) && flyTo.length >= 2) {
+      map.flyTo([flyTo[0], flyTo[1]], 14, { duration: 1.2 });
+    } else if (typeof flyTo.lat === "number" && typeof flyTo.lng === "number") {
       map.flyTo([flyTo.lat, flyTo.lng], flyTo.zoom || 14, { duration: 1.2 });
     }
   }, [flyTo, map]);
+  return null;
+}
+
+/**
+ * Controller to fit map view to specific coordinates (e.g. QARS best route)
+ */
+function FitBoundsController({ fitBoundsCoords }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!fitBoundsCoords || !Array.isArray(fitBoundsCoords) || fitBoundsCoords.length < 2) return;
+    try {
+      const bounds = L.latLngBounds(fitBoundsCoords);
+      if (bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [60, 60], maxZoom: 15, animate: true, duration: 1.2 });
+      }
+    } catch (e) {
+      console.warn("Could not fit route bounds:", e);
+    }
+  }, [fitBoundsCoords, map]);
   return null;
 }
 
@@ -523,6 +555,7 @@ export default function FleetMap({
   selectedUid = null,
   flyTo = null,
   fitToRoutes = false,
+  fitBoundsCoords = null,
   onMapClick = null,
   onVehicleClick = null,
   height = "600px",
@@ -665,6 +698,7 @@ export default function FleetMap({
         {/* Controllers */}
         <FlyToController flyTo={flyTo} />
         <FitRoutesController fitToRoutes={fitToRoutes} routes={routes} />
+        <FitBoundsController fitBoundsCoords={fitBoundsCoords} />
         <MapClickHandler onMapClick={onMapClick} />
         <CustomZoomControls />
 
@@ -833,18 +867,24 @@ export default function FleetMap({
               icon={createDeliveryDivIcon(delivery)}
             >
               <Tooltip direction="top" offset={[0, -12]} opacity={1}>
-                <div className="p-1">
-                  <div className="text-xs font-bold text-white">
+                <div className="p-1 min-w-[140px]">
+                  <div className="text-xs font-bold text-white font-mono">
                     {delivery.code || "Delivery"}
                   </div>
-                  <div className="text-[10px] text-slate-300 capitalize">
-                    Priority: {delivery.priority || "Normal"}
-                  </div>
-                  {delivery.status && (
-                    <div className="text-[10px] text-primary capitalize">
-                      Status: {delivery.status}
+                  {delivery.customerName && (
+                    <div className="text-[11px] text-cyan-300 font-semibold mt-0.5">
+                      {delivery.customerName}
                     </div>
                   )}
+                  {delivery.cargo && (
+                    <div className="text-[10px] text-slate-300 mt-0.5">
+                      {delivery.cargo}
+                    </div>
+                  )}
+                  <div className="text-[10px] text-slate-400 capitalize mt-1 pt-1 border-t border-white/10 flex items-center justify-between">
+                    <span>Priority: {delivery.priority || "Normal"}</span>
+                    <span>{delivery.status || "open"}</span>
+                  </div>
                 </div>
               </Tooltip>
             </Marker>

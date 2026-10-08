@@ -7,7 +7,7 @@
  * Never draw or animate straight or synthetic curved lines between start and end.
  */
 
-import { haversineMeters } from "./geo";
+import { haversineMeters, minDistanceToPolylineMeters } from "./geo";
 
 // In-memory cache for OSRM route calculations
 const routeCache = new Map();
@@ -92,13 +92,11 @@ export async function getRoadRoutes(from, to, { alternatives = true, via = null 
   const coordString = coordsList.join(";");
 
   let rawResult = null;
-  let usedServerName = "OSM";
 
   // Attempt servers in sequence
   for (const server of OSRM_SERVERS) {
     try {
       rawResult = await fetchOsrmRoute(server.url, coordString, alternatives, 8000);
-      usedServerName = server.name;
       break;
     } catch (err) {
       console.warn(`[roadRouting] ${server.name} failed:`, err.message);
@@ -137,7 +135,7 @@ export async function getRoadRoutes(from, to, { alternatives = true, via = null 
     }
 
     return {
-      id: `road-${idx}-${distanceM}`,
+      id: `road-${idx}-${distanceM}-${Date.now()}`,
       coords: latLngCoords,
       distanceM,
       durationS,
@@ -155,6 +153,119 @@ export async function getRoadRoutes(from, to, { alternatives = true, via = null 
   // Cache results
   routeCache.set(cacheKey, validRoutes);
   return validRoutes;
+}
+
+/**
+ * Check if two routes are duplicates:
+ * Length differs by less than 3% AND they share more than 85% of points.
+ */
+function areRoutesDuplicate(r1, r2) {
+  if (!r1?.coords?.length || !r2?.coords?.length) return false;
+
+  // 1. Check length difference (less than 3%)
+  const maxLen = Math.max(r1.distanceM, r2.distanceM, 1);
+  const lenDiff = Math.abs(r1.distanceM - r2.distanceM) / maxLen;
+  if (lenDiff >= 0.03) {
+    return false; // Length difference is >= 3%, not duplicate
+  }
+
+  // 2. Sample points to check if they share more than 85% of points
+  const step = Math.max(1, Math.floor(r1.coords.length / 30));
+  let sharedCount = 0;
+  let totalSampled = 0;
+
+  for (let i = 0; i < r1.coords.length; i += step) {
+    totalSampled++;
+    const [lat, lng] = r1.coords[i];
+    const distToR2 = minDistanceToPolylineMeters({ lat, lng }, r2.coords);
+    if (distToR2 <= 35) {
+      sharedCount++;
+    }
+  }
+
+  const overlapRatio = totalSampled > 0 ? sharedCount / totalSampled : 0;
+  return overlapRatio > 0.85;
+}
+
+/**
+ * Deduplicate route array based on the 3% length & 85% point overlap rule
+ */
+function deduplicateRoutes(routesList) {
+  const unique = [];
+  for (const r of routesList) {
+    if (!r?.coords || r.coords.length < 2) continue;
+    const isDup = unique.some((existing) => areRoutesDuplicate(existing, r));
+    if (!isDup) {
+      unique.push(r);
+    }
+  }
+  return unique;
+}
+
+/**
+ * Always retrieve 2–3 distinct candidate road routes:
+ * If OSRM returns fewer than 3 alternatives, request extra routes with via-point offset
+ * 1.5–2.5 km perpendicular to the start→end midpoint.
+ * Duplicates are filtered out.
+ * Returns routes labeled Route A, B, C with colours [cyan, violet, amber] and isDashed = true.
+ */
+export async function getCandidateRoadRoutes(from, to) {
+  if (!from || !to) return [];
+
+  // 1. Initial attempt with OSRM alternatives = 3
+  let initialRoutes = await getRoadRoutes(from, to, { alternatives: true });
+  let candidateList = deduplicateRoutes(initialRoutes);
+
+  // 2. If fewer than 3 alternatives, compute perpendicular via-points
+  if (candidateList.length < 3) {
+    const midLat = (from.lat + to.lat) / 2;
+    const midLng = (from.lng + to.lng) / 2;
+    const dLat = to.lat - from.lat;
+    const dLng = to.lng - from.lng;
+    const len = Math.hypot(dLat, dLng);
+
+    if (len > 0.0001) {
+      // Perpendicular unit vector (normalized)
+      const perpLeftLat = -dLng / len;
+      const perpLeftLng = dLat / len;
+      const perpRightLat = dLng / len;
+      const perpRightLng = -dLat / len;
+
+      // ~1.8 to 2.2 km offset in degrees (~0.017° - 0.020°)
+      const offsetDeg1 = 0.018; // ~2.0 km
+      const offsetDeg2 = 0.014; // ~1.5 km
+
+      const viaPoints = [
+        { lat: midLat + perpLeftLat * offsetDeg1, lng: midLng + perpLeftLng * offsetDeg1 },
+        { lat: midLat + perpRightLat * offsetDeg1, lng: midLng + perpRightLng * offsetDeg1 },
+        { lat: midLat + perpLeftLat * offsetDeg2, lng: midLng + perpLeftLng * offsetDeg2 },
+        { lat: midLat + perpRightLat * offsetDeg2, lng: midLng + perpRightLng * offsetDeg2 },
+      ];
+
+      for (const via of viaPoints) {
+        if (candidateList.length >= 3) break;
+        try {
+          const extra = await getRoadRoutes(from, to, { alternatives: false, via });
+          if (Array.isArray(extra) && extra.length > 0) {
+            candidateList = deduplicateRoutes([...candidateList, ...extra]);
+          }
+        } catch (err) {
+          console.warn("Extra via route attempt failed:", err?.message || err);
+        }
+      }
+    }
+  }
+
+  // 3. Label Route A, B, C with cyan, violet, amber and dashed styling
+  const ROUTE_COLORS = ["#00E5FF", "#A855F7", "#F59E0B"]; // Cyan, Violet, Amber
+
+  return candidateList.slice(0, 3).map((r, idx) => ({
+    ...r,
+    label: `Route ${String.fromCharCode(65 + idx)}`,
+    routeLetter: String.fromCharCode(65 + idx),
+    color: ROUTE_COLORS[idx % ROUTE_COLORS.length],
+    isDashed: true,
+  }));
 }
 
 /**

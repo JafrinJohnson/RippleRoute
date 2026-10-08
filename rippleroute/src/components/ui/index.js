@@ -10,4 +10,5 @@ export { default as Drawer } from "./Drawer";
 export { default as Skeleton } from "./Skeleton";
 export { default as Avatar } from "./Avatar";
 export { default as StatCard } from "./StatCard";
+export { default as EmptyState } from "./EmptyState";
 export { useToast } from "@/context/ToastContext";

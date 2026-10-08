@@ -81,22 +81,22 @@ export async function resolveHazard(id) {
   return { ok: Boolean(success) };
 }
 
-import { getRoadRoutes } from "@/lib/roadRouting";
+import { getRoadRoutes, getCandidateRoadRoutes } from "@/lib/roadRouting";
 
 /**
  * 6. planRoutes(from, to)
- * Every route must come from getRoadRoutes (src/lib/roadRouting.js) using OSRM with overview=full&geometries=geojson.
+ * Every route must come from getRoadRoutes / getCandidateRoadRoutes (src/lib/roadRouting.js) using OSRM with overview=full&geometries=geojson.
  * Remove ALL synthetic/curved/straight fallback lines. If road data fails, return empty array.
  * @param {{lat: number, lng: number}} from
  * @param {{lat: number, lng: number}} to
- * @returns {Promise<{routes: Array<{id: string, coords: [number, number][], distanceM: number, durationS: number, source: string, snappedStart?: [number, number], snappedEnd?: [number, number]}>}>}
+ * @returns {Promise<{routes: Array<{id: string, coords: [number, number][], distanceM: number, durationS: number, source: string, snappedStart?: [number, number], snappedEnd?: [number, number], label?: string, routeLetter?: string, color?: string, isDashed?: boolean}>}>}
  */
 export async function planRoutes(from, to) {
   if (!from || !to || typeof from.lat !== "number" || typeof from.lng !== "number" || typeof to.lat !== "number" || typeof to.lng !== "number") {
     return { routes: [] };
   }
 
-  const routes = await getRoadRoutes(from, to, { alternatives: true });
+  const routes = await getCandidateRoadRoutes(from, to);
   return { routes: routes || [] };
 }
 

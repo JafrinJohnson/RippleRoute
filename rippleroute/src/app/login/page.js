@@ -26,7 +26,7 @@ import {
 
 export default function LoginPage() {
   const router = useRouter();
-  const { t } = useLanguage();
+  const { t, isTamil } = useLanguage();
   const { login, loginDemo, loading } = useAuth();
   const { toast } = useToast();
 
@@ -166,7 +166,7 @@ export default function LoginPage() {
               loading={loading}
               iconRight={ArrowRight}
             >
-              {t("nav_login")} — Enter Mission Control
+              {t("nav_login")} — {isTamil ? "மிஷன் கட்டுப்பாட்டுக்குள் நுழைக" : "Enter Mission Control"}
             </Button>
           </form>
 
@@ -176,42 +176,46 @@ export default function LoginPage() {
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-                  Demo Access (1-Click Instant Login)
+                  {isTamil ? "டெமோ அணுகல் (1-கிளிக் உடனடி உள்நுழைவு)" : "Demo Access (1-Click Instant Login)"}
                 </span>
                 <Badge variant="safe" size="sm">
-                  READY
+                  {isTamil ? "தயார்" : "READY"}
                 </Badge>
               </div>
               <p className="text-[11px] text-muted mb-3">
-                No credentials required. Enter directly with pre-seeded KovaiSwift evaluation profiles:
+                {isTamil
+                  ? "சான்றுகள் தேவையில்லை. முன் கட்டமைக்கப்பட்ட KovaiSwift மதிப்பீட்டு சுயவிவரங்களுடன் நேரடியாக நுழையுங்கள்:"
+                  : "No credentials required. Enter directly with pre-seeded KovaiSwift evaluation profiles:"}
               </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => handleDemoInstantLogin("admin", "/admin")}
-                  className="p-2.5 rounded-xl bg-primary/15 border border-primary/40 hover:bg-primary/25 text-left transition-all group"
+                  className="p-2.5 rounded-xl bg-primary/15 border border-primary/40 hover:bg-primary/25 text-left transition-all group interactive-hover"
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-white flex items-center gap-1.5">
                       <ShieldAlert className="w-3.5 h-3.5 text-primary" />
-                      Admin
+                      {isTamil ? "நிர்வாகி" : "Admin"}
                     </span>
                     <ArrowRight className="w-3 h-3 text-primary opacity-0 group-hover:opacity-100 transition-opacity" />
                   </div>
                   <span className="text-[10px] text-slate-300 block mt-1 font-semibold">Kavya S</span>
-                  <span className="text-[9px] text-muted block truncate">Logistics Team &bull; KS-CBE-01</span>
+                  <span className="text-[9px] text-muted block truncate">
+                    {isTamil ? "தளவாடங்கள் குழு • KS-CBE-01" : "Logistics Team • KS-CBE-01"}
+                  </span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleDemoInstantLogin("driver", "/driver")}
-                  className="p-2.5 rounded-xl bg-cyan/15 border border-cyan/40 hover:bg-cyan/25 text-left transition-all group"
+                  className="p-2.5 rounded-xl bg-cyan/15 border border-cyan/40 hover:bg-cyan/25 text-left transition-all group interactive-hover"
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-white flex items-center gap-1.5">
                       <Truck className="w-3.5 h-3.5 text-cyan" />
-                      Driver
+                      {isTamil ? "ஓட்டுநர்" : "Driver"}
                     </span>
                     <ArrowRight className="w-3 h-3 text-cyan opacity-0 group-hover:opacity-100 transition-opacity" />
                   </div>
@@ -222,17 +226,19 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={() => handleDemoInstantLogin("emergency", "/emergency")}
-                  className="p-2.5 rounded-xl bg-pink/15 border border-pink/40 hover:bg-pink/25 text-left transition-all group"
+                  className="p-2.5 rounded-xl bg-pink/15 border border-pink/40 hover:bg-pink/25 text-left transition-all group interactive-hover"
                 >
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-white flex items-center gap-1.5">
                       <HeartPulse className="w-3.5 h-3.5 text-pink" />
-                      Emergency
+                      {isTamil ? "அவசரப்பிரிவு" : "Emergency"}
                     </span>
                     <ArrowRight className="w-3 h-3 text-pink opacity-0 group-hover:opacity-100 transition-opacity" />
                   </div>
                   <span className="text-[10px] text-slate-300 block mt-1 font-semibold">Priya R</span>
-                  <span className="text-[9px] text-muted block truncate">TN 38 AZ 7790 &bull; Medical</span>
+                  <span className="text-[9px] text-muted block truncate">
+                    TN 38 AZ 7790 &bull; {isTamil ? "மருத்துவப் பிரிவு" : "Medical"}
+                  </span>
                 </button>
               </div>
             </div>

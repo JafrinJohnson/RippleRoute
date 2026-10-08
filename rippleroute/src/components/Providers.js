@@ -11,7 +11,9 @@ export default function Providers({ children }) {
     <ThemeProvider>
       <LanguageProvider>
         <ToastProvider>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <div className="page-transition min-h-screen flex flex-col">{children}</div>
+          </AuthProvider>
         </ToastProvider>
       </LanguageProvider>
     </ThemeProvider>
