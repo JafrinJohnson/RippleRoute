@@ -1,88 +1,263 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import Navbar from "@/components/layout/Navbar";
 import RoleGuard from "@/components/RoleGuard";
+import DashboardTopBar from "@/components/layout/DashboardTopBar";
 import { useAuth } from "@/context/AuthContext";
-import { GlassCard, Button, Badge } from "@/components/ui";
-import { HeartPulse, LogOut, Activity, Clock, ShieldAlert } from "lucide-react";
+import { GlassCard, Button, Badge, useToast } from "@/components/ui";
+import FleetMap from "@/components/map";
+import {
+  HeartPulse,
+  Clock,
+  Activity,
+  ShieldAlert,
+  AlertTriangle,
+  MapPin,
+  CheckCircle,
+  Phone,
+  Zap,
+  Navigation,
+} from "lucide-react";
+
+const COIMBATORE_CENTER = [11.0168, 76.9558];
+
+const EMERGENCY_HAZARDS = [
+  {
+    id: "haz-01",
+    type: "landslide",
+    severity: "critical",
+    lat: 11.1350,
+    lng: 76.9380,
+    radiusM: 500,
+    note: "Rockfall debris at Kallar hairpin #4. Ghat road restricted.",
+    roadName: "Mettupalayam–Coonoor Pass (KM 14)",
+  },
+  {
+    id: "haz-02",
+    type: "accident",
+    severity: "high",
+    lat: 11.0250,
+    lng: 76.9800,
+    radiusM: 320,
+    note: "Multi-vehicle incident west-bound lane. 18 min delay.",
+    roadName: "Avinashi Road Flyover near Lakshmi Mills",
+  },
+];
+
+const EMERGENCY_DELIVERIES = [
+  {
+    id: "del-kmch",
+    code: "MED-KMCH-01",
+    priority: "medical",
+    lat: 11.0420,
+    lng: 77.0350,
+    status: "in_transit",
+  },
+  {
+    id: "del-cbe-gh",
+    code: "MED-CBE-GH",
+    priority: "medical",
+    lat: 11.0010,
+    lng: 76.9650,
+    status: "pending",
+  },
+];
+
+const EMERGENCY_ROUTE = [
+  {
+    id: "route-emg",
+    label: "Priority-Alpha Corridor: Peelamedu → RS Puram GH",
+    color: "#EF4444",
+    highlighted: true,
+    coords: [
+      [11.0270, 77.0100],
+      [11.0350, 76.9920],
+      [11.0280, 76.9700],
+      [11.0150, 76.9550],
+      [11.0089, 76.9500],
+    ],
+  },
+];
 
 function EmergencyDashboardContent() {
-  const { profile, logout } = useAuth();
-  const router = useRouter();
+  const { profile } = useAuth();
+  const { toast } = useToast();
+  const [greenCorridorActive, setGreenCorridorActive] = useState(true);
 
-  const handleLogout = () => {
-    logout();
-    router.push("/login");
+  const emergencyVehicle = [
+    {
+      uid: "emg-active",
+      name: profile?.name || "Priya R",
+      vehicleNumber: profile?.vehicleNumber || "TN 38 AZ 7790",
+      lat: 11.0310,
+      lng: 76.9820,
+      status: "delayed",
+      role: "emergency",
+      priority: "medical",
+      heading: 230,
+      isEmergency: true,
+      cargoType: profile?.priority || "Medical – oxygen/medicines",
+    },
+  ];
+
+  const handleToggleGreenCorridor = () => {
+    const nextState = !greenCorridorActive;
+    setGreenCorridorActive(nextState);
+    toast({
+      type: nextState ? "success" : "warn",
+      title: nextState ? "Green Corridor Active" : "Corridor Standby",
+      description: nextState
+        ? "Preemptive signal priority granted across Coimbatore core."
+        : "Standard transit rules restored.",
+    });
   };
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <Navbar />
+    <div className="min-h-screen flex flex-col bg-bg">
+      {/* Universal Dashboard Top Bar with Role Switcher & Live Map link */}
+      <DashboardTopBar currentRole="emergency" />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-        {/* Welcome Banner */}
-        <GlassCard padding="p-8 sm:p-10" className="border-pink/40 shadow-glow-pink">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
-            <div className="flex items-start sm:items-center gap-4">
-              <div className="p-4 rounded-2xl bg-pink/20 text-pink border border-pink/40 shadow-glow-pink animate-pulse">
-                <HeartPulse className="w-8 h-8" />
-              </div>
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <Badge variant="emergency" size="sm" pulse>
-                    EMERGENCY CARGO HUD
-                  </Badge>
-                  <span className="text-xs text-pink font-semibold">
-                    Cargo: {profile?.priority || "Medical – oxygen/medicines"}
-                  </span>
-                </div>
-                <h1 className="text-2xl sm:text-4xl font-extrabold font-heading text-text">
-                  Welcome, {profile?.name || "Emergency Medical Operator"}
-                </h1>
-                <p className="text-xs sm:text-sm text-muted">
-                  ID: {profile?.driverId || "EMG-9014"} • Vehicle: {profile?.vehicleNumber || "TN 38 AL 9014"} • +91 {profile?.phone || "98421 88402"}
-                </p>
-              </div>
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        {/* Top Emergency HUD Status Banner */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <Badge variant="emergency" size="sm" pulse>
+                PRIORITY-ALPHA EMERGENCY HUD
+              </Badge>
+              <span className="text-xs text-pink font-semibold font-mono">
+                Cargo: {profile?.priority || "Medical – oxygen/medicines"}
+              </span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold font-heading text-white">
+              Operator: {profile?.name || "Priya R"}
+            </h1>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Link href="/live-map">
+              <Button variant="cyan" size="sm" icon={MapPin} className="shadow-glow-cyan font-bold">
+                Open Full Live Map
+              </Button>
+            </Link>
+          </div>
+        </div>
+
+        {/* 2-Column Main Section: Map Immediately Visible on Left */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* LEFT SIDE: FleetMap visible immediately on page load */}
+          <div className="lg:col-span-8 flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                <HeartPulse className="w-4 h-4 text-pink animate-pulse" />
+                Live Green Corridor & Medical Nodes
+              </h2>
+              <span className="text-xs text-pink font-mono">
+                Centered on Coimbatore &bull; High-Priority Route
+              </span>
             </div>
 
-            <Button
-              variant="danger"
-              size="md"
-              icon={LogOut}
-              onClick={handleLogout}
-            >
-              Logout
-            </Button>
+            <FleetMap
+              center={COIMBATORE_CENTER}
+              zoom={13}
+              vehicles={emergencyVehicle}
+              routes={EMERGENCY_ROUTE}
+              hazards={EMERGENCY_HAZARDS}
+              deliveries={EMERGENCY_DELIVERIES}
+              selectedUid="emg-active"
+              height="580px"
+            />
           </div>
-        </GlassCard>
 
-        {/* Quick status placeholder */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <GlassCard padding="p-6">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted">
-              Routing Priority Level
-            </span>
-            <p className="text-xl font-bold font-heading text-pink mt-2">Priority-Alpha Green Corridor</p>
-            <p className="text-xs text-muted mt-1">Preempts all regular freight swarm slots</p>
-          </GlassCard>
+          {/* RIGHT SIDE: Cryogenic Countdown & Priority Controls */}
+          <div className="lg:col-span-4 flex flex-col gap-4">
+            {/* Lifespan Countdown Card */}
+            <GlassCard padding="p-5" className="border-pink/40 shadow-glow-pink/20">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-pink flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-pink" />
+                  Cargo Lifespan Countdown
+                </span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-pink/20 text-pink font-bold animate-pulse">
+                  CRITICAL
+                </span>
+              </div>
 
-          <GlassCard padding="p-6">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted">
-              Cargo Lifespan Countdown
-            </span>
-            <p className="text-xl font-bold font-heading text-safe mt-2">3.5 Hours Reserve</p>
-            <p className="text-xs text-muted mt-1">Cryogenic oxygen & vaccine temperature monitored</p>
-          </GlassCard>
+              <div className="p-4 rounded-xl bg-pink/10 border border-pink/30 text-center mb-3">
+                <div className="text-3xl font-black font-heading text-white">
+                  03h : 28m : 14s
+                </div>
+                <div className="text-xs text-pink font-semibold mt-1">
+                  Liquid Oxygen Tank Temperature: -183°C (Nominal)
+                </div>
+              </div>
 
-          <GlassCard padding="p-6">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted">
-              Hospital Transit Corridor
-            </span>
-            <p className="text-xl font-bold font-heading text-cyan mt-2">KMCH & GH Priority</p>
-            <p className="text-xs text-muted mt-1">Real-time emergency bypass through Avinashi rd</p>
-          </GlassCard>
+              <p className="text-[11px] text-muted leading-relaxed">
+                Automated cold-chain monitoring. Re-routing triggered automatically if ETA exceeds safe shelf-life threshold.
+              </p>
+            </GlassCard>
+
+            {/* Green Corridor Control Card */}
+            <GlassCard padding="p-5" className="border-safe/30 shadow-glow-safe/10">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                  <Activity className="w-4 h-4 text-safe" />
+                  Signal Preemption Status
+                </h3>
+                <Badge variant={greenCorridorActive ? "safe" : "secondary"} size="sm">
+                  {greenCorridorActive ? "ACTIVE" : "STANDBY"}
+                </Badge>
+              </div>
+
+              <p className="text-xs text-muted mb-4 leading-relaxed">
+                Green Corridor signals traffic synchronization through Lakshmi Mills and Town Hall corridors.
+              </p>
+
+              <Button
+                variant={greenCorridorActive ? "danger" : "primary"}
+                size="md"
+                onClick={handleToggleGreenCorridor}
+                className="w-full font-bold"
+              >
+                {greenCorridorActive ? "Disengage Green Corridor" : "Activate Green Corridor"}
+              </Button>
+            </GlassCard>
+
+            {/* Hospital Hotlines Card */}
+            <GlassCard padding="p-5" className="border-glass-border">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+                  <ShieldAlert className="w-4 h-4 text-cyan-400" />
+                  Hospital Emergency Line
+                </h3>
+                <span className="text-[10px] text-muted font-mono">PRIORITY</span>
+              </div>
+
+              <div className="space-y-2 text-xs">
+                <div className="p-2.5 rounded-lg bg-white/5 border border-white/5 flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-white">KMCH Avinashi Road</div>
+                    <div className="text-[10px] text-muted">ICU Reception: Ready</div>
+                  </div>
+                  <Button variant="ghost" size="sm" icon={Phone} className="h-7 text-xs px-2">
+                    Call
+                  </Button>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-white/5 border border-white/5 flex items-center justify-between">
+                  <div>
+                    <div className="font-bold text-white">Coimbatore GH Terminal</div>
+                    <div className="text-[10px] text-muted">Oxygen Bay: Cleared</div>
+                  </div>
+                  <Button variant="ghost" size="sm" icon={Phone} className="h-7 text-xs px-2">
+                    Call
+                  </Button>
+                </div>
+              </div>
+            </GlassCard>
+          </div>
         </div>
       </main>
     </div>

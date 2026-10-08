@@ -3,8 +3,10 @@
 import React, { useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import Navbar from "@/components/layout/Navbar";
+import { useAuth } from "@/context/AuthContext";
 import {
   GlassCard,
   Button,
@@ -70,6 +72,18 @@ const fadeInUp = {
 export default function LandingPage() {
   const { t, isTamil } = useLanguage();
   const { toast } = useToast();
+  const router = useRouter();
+  const { loginDemo } = useAuth();
+
+  const handleDemoLogin = async (role, destination) => {
+    await loginDemo(role);
+    toast({
+      type: "success",
+      title: "Demo Cockpit Loaded",
+      description: `Entered as ${role.toUpperCase()} (1-Click Demo Evaluation)`,
+    });
+    router.push(destination);
+  };
 
   // Contact form client states
   const [contactName, setContactName] = useState("");
@@ -153,6 +167,17 @@ export default function LandingPage() {
                     className="w-full sm:w-auto shadow-glow"
                   >
                     {t("hero_btn_get_started")}
+                  </Button>
+                </Link>
+
+                <Link href="/live-map">
+                  <Button
+                    variant="cyan"
+                    size="lg"
+                    icon={MapPin}
+                    className="w-full sm:w-auto shadow-glow-cyan font-bold"
+                  >
+                    View Live Map
                   </Button>
                 </Link>
 
@@ -991,6 +1016,58 @@ export default function LandingPage() {
             </motion.div>
 
           </div>
+
+          {/* Try the Demo 1-Click Access Panel for Reviewers */}
+          <motion.div {...fadeInUp} className="mt-8">
+            <GlassCard padding="p-6 sm:p-8" className="border-cyan/30 shadow-glow-cyan bg-bg-2/80">
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                <div>
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <Badge variant="safe" size="sm" pulse>
+                      1-CLICK EVALUATION
+                    </Badge>
+                    <span className="text-xs text-muted font-mono">No Credentials Required</span>
+                  </div>
+                  <h3 className="text-xl sm:text-2xl font-bold font-heading text-text">
+                    Try the Demo Cockpits
+                  </h3>
+                  <p className="text-xs sm:text-sm text-muted mt-1 max-w-xl leading-relaxed">
+                    Instantly enter live mission control with pre-seeded KovaiSwift profiles: Operations Admin, Fleet Driver, or Priority Emergency Transit.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap sm:flex-nowrap items-center gap-3 w-full lg:w-auto">
+                  <Button
+                    variant="primary"
+                    size="md"
+                    icon={ShieldAlert}
+                    onClick={() => handleDemoLogin("admin", "/admin")}
+                    className="flex-1 sm:flex-none shadow-glow font-bold"
+                  >
+                    Enter as Admin
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    icon={Truck}
+                    onClick={() => handleDemoLogin("driver", "/driver")}
+                    className="flex-1 sm:flex-none hover:border-cyan/50 text-cyan-400 font-bold"
+                  >
+                    Enter as Driver
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="md"
+                    icon={HeartPulse}
+                    onClick={() => handleDemoLogin("emergency", "/emergency")}
+                    className="flex-1 sm:flex-none shadow-glow-danger font-bold"
+                  >
+                    Enter as Emergency
+                  </Button>
+                </div>
+              </div>
+            </GlassCard>
+          </motion.div>
         </section>
 
         {/* ====================================================================

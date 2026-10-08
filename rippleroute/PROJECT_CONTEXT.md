@@ -61,3 +61,4 @@
 - **Rule 5 (Resilient Async)**: Every asynchronous request must implement defensive `try/catch` with deterministic graceful fallback data.
 - **Rule 6 (Zero External Images)**: Never load volatile external image URLs. Use inline SVG vector graphics, CSS gradients, Canvas, or generated assets.
 - **Rule 7 (Continuous Verification)**: Run `npm run build` after major structural additions to maintain zero TypeScript/ESLint/Webpack regressions.
+- **ROAD RULE**: Every route line in the app comes from `getRoadRoutes` (real road geometry, `overview=full`) and every moving vehicle moves only along its route with `routeAnimator`. Never draw or animate straight lines between start and end.

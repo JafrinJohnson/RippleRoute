@@ -24,11 +24,12 @@ export default function Navbar({ onOpenAuthModal, onQuickAction }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const navLinks = [
-    { href: "#about", label: t("nav_about") },
-    { href: "#features", label: t("nav_features") },
-    { href: "#how-it-works", label: t("nav_how_it_works") },
-    { href: "#roles", label: t("nav_roles") },
-    { href: "#contact", label: t("nav_contact") },
+    { href: "/live-map", label: isTamil ? "நேரடி வரைபடம்" : "Live Map", isRoute: true },
+    { href: "/#about", label: t("nav_about") },
+    { href: "/#features", label: t("nav_features") },
+    { href: "/#how-it-works", label: t("nav_how_it_works") },
+    { href: "/#roles", label: t("nav_roles") },
+    { href: "/#contact", label: t("nav_contact") },
   ];
 
   const accentOptions = [
@@ -127,13 +128,17 @@ export default function Navbar({ onOpenAuthModal, onQuickAction }) {
           {/* Desktop Nav Links */}
           <nav className="hidden lg:flex items-center gap-1 xl:gap-2">
             {navLinks.map((link) => (
-              <a
+              <Link
                 key={link.href}
                 href={link.href}
-                className="px-3 py-1.5 rounded-xl text-xs xl:text-sm font-medium text-muted hover:text-text hover:bg-glass transition-colors duration-150"
+                className={`px-3 py-1.5 rounded-xl text-xs xl:text-sm font-medium transition-colors duration-150 ${
+                  link.isRoute
+                    ? "text-cyan-400 font-semibold bg-cyan-500/10 border border-cyan-500/25 shadow-sm"
+                    : "text-muted hover:text-text hover:bg-glass"
+                }`}
               >
                 {link.label}
-              </a>
+              </Link>
             ))}
           </nav>
 
@@ -274,14 +279,18 @@ export default function Navbar({ onOpenAuthModal, onQuickAction }) {
           <div className="flex flex-col gap-3">
             <nav className="flex flex-col gap-1 pb-3 border-b border-glass-border">
               {navLinks.map((link) => (
-                <a
+                <Link
                   key={link.href}
                   href={link.href}
                   onClick={() => setMobileMenuOpen(false)}
-                  className="px-3 py-2 rounded-xl text-sm font-medium text-text hover:bg-glass"
+                  className={`px-3 py-2 rounded-xl text-sm font-medium transition-colors ${
+                    link.isRoute
+                      ? "text-cyan-400 font-bold bg-cyan-500/10 border border-cyan-500/20"
+                      : "text-text hover:bg-glass"
+                  }`}
                 >
                   {link.label}
-                </a>
+                </Link>
               ))}
             </nav>
 

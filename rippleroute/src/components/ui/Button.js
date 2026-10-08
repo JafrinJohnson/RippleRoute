@@ -9,12 +9,14 @@ export default function Button({
   loading = false,
   disabled = false,
   icon: Icon,
+  iconLeft: IconLeft,
   iconRight: IconRight,
   className = "",
   type = "button",
   onClick,
   ...props
 }) {
+  const EffectiveIcon = Icon || IconLeft;
   const baseStyles =
     "relative inline-flex items-center justify-center font-medium rounded-xl transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary/40 disabled:opacity-50 disabled:cursor-not-allowed select-none active:scale-[0.98]";
 
@@ -55,8 +57,8 @@ export default function Button({
     >
       {loading ? (
         <Loader2 className="w-4 h-4 animate-spin text-current" />
-      ) : Icon ? (
-        <Icon className={size === "sm" ? "w-3.5 h-3.5" : "w-4 h-4"} />
+      ) : EffectiveIcon ? (
+        <EffectiveIcon className={size === "sm" ? "w-3.5 h-3.5" : "w-4 h-4"} />
       ) : null}
 
       <span>{children}</span>

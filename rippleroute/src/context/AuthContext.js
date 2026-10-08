@@ -51,6 +51,52 @@ const SEED_USERS = [
   },
 ];
 
+const DEMO_PROFILES = {
+  admin: {
+    uid: "demo-admin-01",
+    role: "admin",
+    name: "Kavya S",
+    username: "kavya_admin",
+    email: "kavya@kovaiswift.com",
+    companyId: "KS-CBE-01",
+    department: "Logistics Team",
+    phone: "9842100001",
+    driverId: "",
+    vehicleNumber: "",
+    priority: "",
+    isDemo: true,
+  },
+  driver: {
+    uid: "demo-driver-01",
+    role: "driver",
+    name: "Murugan K",
+    username: "murugan_driver",
+    email: "murugan@kovaiswift.com",
+    companyId: "KS-CBE-01",
+    department: "Delivery Team",
+    phone: "9842104521",
+    driverId: "DRV-4521",
+    vehicleNumber: "TN 38 BX 4521",
+    priority: "",
+    isDemo: true,
+  },
+  emergency: {
+    uid: "demo-emg-01",
+    role: "emergency",
+    name: "Priya R",
+    username: "priya_emergency",
+    email: "priya@kovaiswift.com",
+    companyId: "KS-CBE-01",
+    department: "Emergency Medical Fleet",
+    phone: "9842107790",
+    driverId: "EMG-7790",
+    vehicleNumber: "TN 38 AZ 7790",
+    priority: "Medical – oxygen",
+    cargoType: "Medical – oxygen",
+    isDemo: true,
+  },
+};
+
 const sleep = (ms = 600) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Safe default context value with no-op async functions
@@ -60,6 +106,11 @@ const defaultAuthValue = {
   loading: false,
   signup: async () => ({ ok: false, error: "AuthProvider not mounted" }),
   login: async () => ({ ok: false, error: "AuthProvider not mounted" }),
+  loginDemo: async (role = "admin") => ({
+    ok: true,
+    role,
+    profile: DEMO_PROFILES[role] || DEMO_PROFILES.admin,
+  }),
   logout: () => {},
 };
 
@@ -226,6 +277,26 @@ export function AuthProvider({ children }) {
     setProfile(null);
   }, []);
 
+  // Fast 1-click Demo Login for Judges and Reviewers
+  const loginDemo = useCallback(async (role = "admin") => {
+    setLoading(true);
+    try {
+      const targetRole = (role || "admin").toLowerCase();
+      const demoProfile = DEMO_PROFILES[targetRole] || DEMO_PROFILES.admin;
+      try {
+        if (typeof window !== "undefined") {
+          localStorage.setItem(SESSION_KEY, JSON.stringify(demoProfile));
+        }
+      } catch (storageErr) {
+        console.warn("Could not save demo session to localStorage:", storageErr);
+      }
+      setProfile(demoProfile);
+      return { ok: true, role: demoProfile.role, profile: demoProfile };
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const user = profile
     ? {
         uid: profile.uid,
@@ -241,6 +312,7 @@ export function AuthProvider({ children }) {
     loading,
     signup,
     login,
+    loginDemo,
     logout,
   };
 

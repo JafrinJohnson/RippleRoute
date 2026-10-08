@@ -27,7 +27,7 @@ import {
 export default function LoginPage() {
   const router = useRouter();
   const { t } = useLanguage();
-  const { login, loading } = useAuth();
+  const { login, loginDemo, loading } = useAuth();
   const { toast } = useToast();
 
   const [identifier, setIdentifier] = useState("");
@@ -77,11 +77,16 @@ export default function LoginPage() {
     }
   };
 
-  // 1-Click quick fill demo accounts for hackathon judges & testers
-  const fillDemoAccount = (demoId, demoPass) => {
-    setIdentifier(demoId);
-    setPassword(demoPass);
-    setError("");
+  const handleDemoInstantLogin = async (role, destination) => {
+    const res = await loginDemo(role);
+    if (res && res.ok) {
+      toast({
+        type: "success",
+        title: "Demo Cockpit Loaded",
+        description: `Logged in as ${res.profile?.name} (${role.toUpperCase()})`,
+      });
+      router.push(destination);
+    }
   };
 
   return (
@@ -165,48 +170,71 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          {/* Quick Demo Credentials Bar for Easy Evaluation */}
+          {/* Demo Access Panel for Hackathon Reviewers */}
           <div className="pt-3 border-t border-glass-border">
-            <span className="text-[11px] font-bold uppercase tracking-wider text-muted block mb-2 text-center">
-              Quick 1-Click Evaluation Accounts
-            </span>
+            <div className="p-4 rounded-2xl bg-glass border border-cyan/30 shadow-glow-cyan/20">
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                  Demo Access (1-Click Instant Login)
+                </span>
+                <Badge variant="safe" size="sm">
+                  READY
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted mb-3">
+                No credentials required. Enter directly with pre-seeded KovaiSwift evaluation profiles:
+              </p>
 
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => fillDemoAccount("admin01", "password123")}
-                className="p-2 rounded-xl bg-glass border border-glass-border hover:border-primary/50 text-left transition-all"
-              >
-                <div className="flex items-center gap-1.5 text-primary text-[11px] font-bold">
-                  <ShieldAlert className="w-3.5 h-3.5" />
-                  <span>Admin</span>
-                </div>
-                <span className="text-[10px] text-muted block mt-0.5 truncate">admin01</span>
-              </button>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleDemoInstantLogin("admin", "/admin")}
+                  className="p-2.5 rounded-xl bg-primary/15 border border-primary/40 hover:bg-primary/25 text-left transition-all group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <ShieldAlert className="w-3.5 h-3.5 text-primary" />
+                      Admin
+                    </span>
+                    <ArrowRight className="w-3 h-3 text-primary opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                  <span className="text-[10px] text-slate-300 block mt-1 font-semibold">Kavya S</span>
+                  <span className="text-[9px] text-muted block truncate">Logistics Team &bull; KS-CBE-01</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => fillDemoAccount("drive01", "password123")}
-                className="p-2 rounded-xl bg-glass border border-glass-border hover:border-cyan/50 text-left transition-all"
-              >
-                <div className="flex items-center gap-1.5 text-cyan text-[11px] font-bold">
-                  <Truck className="w-3.5 h-3.5" />
-                  <span>Driver</span>
-                </div>
-                <span className="text-[10px] text-muted block mt-0.5 truncate">drive01</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleDemoInstantLogin("driver", "/driver")}
+                  className="p-2.5 rounded-xl bg-cyan/15 border border-cyan/40 hover:bg-cyan/25 text-left transition-all group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Truck className="w-3.5 h-3.5 text-cyan" />
+                      Driver
+                    </span>
+                    <ArrowRight className="w-3 h-3 text-cyan opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                  <span className="text-[10px] text-slate-300 block mt-1 font-semibold">Murugan K</span>
+                  <span className="text-[9px] text-muted block truncate">TN 38 BX 4521</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => fillDemoAccount("emerg01", "password123")}
-                className="p-2 rounded-xl bg-glass border border-glass-border hover:border-pink/50 text-left transition-all"
-              >
-                <div className="flex items-center gap-1.5 text-pink text-[11px] font-bold">
-                  <HeartPulse className="w-3.5 h-3.5" />
-                  <span>Emergency</span>
-                </div>
-                <span className="text-[10px] text-muted block mt-0.5 truncate">emerg01</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleDemoInstantLogin("emergency", "/emergency")}
+                  className="p-2.5 rounded-xl bg-pink/15 border border-pink/40 hover:bg-pink/25 text-left transition-all group"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <HeartPulse className="w-3.5 h-3.5 text-pink" />
+                      Emergency
+                    </span>
+                    <ArrowRight className="w-3 h-3 text-pink opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                  <span className="text-[10px] text-slate-300 block mt-1 font-semibold">Priya R</span>
+                  <span className="text-[9px] text-muted block truncate">TN 38 AZ 7790 &bull; Medical</span>
+                </button>
+              </div>
             </div>
           </div>
 
