@@ -456,12 +456,106 @@ export function subscribeMessages(uid, cb) {
  * 7. Customer SMS
  */
 export async function sendCustomerSms({ to, body, deliveryCode }) {
-  await new Promise((r) => setTimeout(r, 800));
-  const sid = `SM_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+  try {
+    const res = await fetch("/api/sms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to, body, deliveryCode }),
+    });
+    const result = await res.json().catch(() => ({ ok: false, error: "Invalid server response" }));
+
+    if (isFirebaseConfigured) {
+      try {
+        await firestoreApi.logSms({
+          to,
+          body,
+          deliveryCode,
+          ok: Boolean(result.ok),
+          sid: result.sid || "",
+          error: result.error || "",
+          channel: "sms",
+        });
+      } catch (_) {}
+    } else {
+      mockStore.logSms({
+        to,
+        body,
+        deliveryCode,
+        ok: Boolean(result.ok),
+        sid: result.sid || "",
+        error: result.error || "",
+        channel: "sms",
+      });
+    }
+
+    return {
+      ok: Boolean(result.ok),
+      sid: result.sid || null,
+      error: result.error || null,
+      code: result.code || null,
+      to: result.to || to,
+    };
+  } catch (err) {
+    const errorMsg = err?.message || "Network error dispatching SMS";
+    if (isFirebaseConfigured) {
+      try {
+        await firestoreApi.logSms({ to, body, deliveryCode, ok: false, error: errorMsg, channel: "sms" });
+      } catch (_) {}
+    } else {
+      mockStore.logSms({ to, body, deliveryCode, ok: false, error: errorMsg, channel: "sms" });
+    }
+    return { ok: false, error: errorMsg };
+  }
+}
+
+/**
+ * Log customer notification across channels (sms / whatsapp / device)
+ */
+export async function logCustomerNotification({
+  to,
+  body,
+  deliveryCode,
+  channel = "whatsapp",
+  ok = true,
+  sid = "",
+  error = "",
+  by = "Admin Dispatch",
+  createdAt,
+}) {
   if (isFirebaseConfigured) {
     try {
-      await firestoreApi.logSms({ to, body, deliveryCode, ok: true, sid });
+      await firestoreApi.logSms({
+        to,
+        body,
+        deliveryCode,
+        ok: Boolean(ok),
+        sid: sid || "",
+        error: error || "",
+        channel,
+        by,
+        createdAt,
+      });
     } catch (_) {}
+  } else {
+    mockStore.logSms({
+      to,
+      body,
+      deliveryCode,
+      ok: Boolean(ok),
+      sid: sid || "",
+      error: error || "",
+      channel,
+      by,
+      createdAt,
+    });
   }
-  return { ok: true, sid };
 }
+
+export function subscribeSmsLogs(cb) {
+  if (isFirebaseConfigured) {
+    return firestoreApi.subscribeSmsLogs(cb);
+  }
+  return mockStore.subscribeSmsLogs(cb);
+}
+
+

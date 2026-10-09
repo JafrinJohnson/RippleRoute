@@ -389,7 +389,7 @@ export function subscribeMessages(uid, cb) {
 // 5. SMS LOGGING
 // =========================================================================
 
-export async function logSms({ to, body, deliveryCode, ok, sid, error, by }) {
+export async function logSms({ to, body, deliveryCode, ok, sid, error, by, channel }) {
   if (!db) return { ok: false, error: "Database not configured" };
   try {
     await addDoc(collection(db, "smsLogs"), {
@@ -399,6 +399,7 @@ export async function logSms({ to, body, deliveryCode, ok, sid, error, by }) {
       ok: Boolean(ok),
       sid: sid || "",
       error: error || "",
+      channel: channel || "sms",
       by: by || auth?.currentUser?.uid || "admin",
       createdAt: serverTimestamp(),
     });
@@ -408,3 +409,28 @@ export async function logSms({ to, body, deliveryCode, ok, sid, error, by }) {
     return { ok: false, error: err?.message || String(err) };
   }
 }
+
+export function subscribeSmsLogs(cb) {
+  if (!db) {
+    cb([]);
+    return () => {};
+  }
+  const q = collection(db, "smsLogs");
+  return onSnapshot(
+    q,
+    (snap) => {
+      const logs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      logs.sort((a, b) => {
+        const timeA = a.createdAt?.toMillis ? a.createdAt.toMillis() : new Date(a.createdAt || 0).getTime();
+        const timeB = b.createdAt?.toMillis ? b.createdAt.toMillis() : new Date(b.createdAt || 0).getTime();
+        return timeB - timeA;
+      });
+      cb(logs);
+    },
+    (err) => {
+      console.warn("[firestoreApi] subscribeSmsLogs error:", err);
+      cb([]);
+    }
+  );
+}
+

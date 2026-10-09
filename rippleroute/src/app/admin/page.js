@@ -23,10 +23,12 @@ import {
   subscribeLiveLocations,
   sendMessage,
   subscribeMessages,
-  sendCustomerSms,
+  logCustomerNotification,
+  subscribeSmsLogs,
   DEPOT_PEELAMEDU,
   COIMBATORE_CENTER,
 } from "@/services/api";
+import { buildCustomerSms } from "@/lib/smsTemplate";
 import { seedDemoData } from "@/lib/seed";
 import { haversineMeters } from "@/lib/geo";
 import {
@@ -66,6 +68,82 @@ import {
   CheckCircle,
   TrendingUp,
 } from "lucide-react";
+
+/**
+ * Validate Indian mobile number: 10 digits starting with 6–9 (with optional 0, 91, or +91 prefix)
+ */
+function validateIndianPhone(phone) {
+  if (!phone) return { valid: false, digits: "" };
+  const raw = String(phone).replace(/\D/g, "");
+  let mobile10 = "";
+  if (raw.length === 10) {
+    mobile10 = raw;
+  } else if (raw.length === 11 && raw.startsWith("0")) {
+    mobile10 = raw.slice(1);
+  } else if (raw.length === 12 && raw.startsWith("91")) {
+    mobile10 = raw.slice(2);
+  } else {
+    return { valid: false, digits: "" };
+  }
+  if (/^[6-9]\d{9}$/.test(mobile10)) {
+    return { valid: true, digits: `91${mobile10}` };
+  }
+  return { valid: false, digits: "" };
+}
+
+/**
+ * Mask phone numbers for audit display: +91 75xxxxx940 format
+ */
+function maskPhoneNumber(phone) {
+  if (!phone) return "+91 75xxxxx940";
+  const digits = String(phone).replace(/\D/g, "");
+  let mobile10 = "";
+  if (digits.length === 10) {
+    mobile10 = digits;
+  } else if (digits.length === 11 && digits.startsWith("0")) {
+    mobile10 = digits.slice(1);
+  } else if (digits.length === 12 && digits.startsWith("91")) {
+    mobile10 = digits.slice(2);
+  } else if (digits.length > 10) {
+    mobile10 = digits.slice(-10);
+  } else {
+    return phone;
+  }
+  return `+91 ${mobile10.slice(0, 2)}xxxxx${mobile10.slice(-3)}`;
+}
+
+/**
+ * Format timestamp for audit log display
+ */
+function formatLogTime(createdAt) {
+  if (!createdAt) return "Just now";
+  let d;
+  if (typeof createdAt === "object" && createdAt?.toMillis) {
+    d = new Date(createdAt.toMillis());
+  } else if (typeof createdAt === "object" && createdAt?.seconds) {
+    d = new Date(createdAt.seconds * 1000);
+  } else {
+    d = new Date(createdAt);
+  }
+  if (isNaN(d.getTime())) return String(createdAt);
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+/**
+ * Official WhatsApp SVG icon component
+ */
+function WhatsAppIcon({ className = "w-4 h-4" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className={className}
+      fill="currentColor"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" />
+    </svg>
+  );
+}
 
 /**
  * Audio beep alert using Web Audio API
@@ -155,23 +233,37 @@ function AdminControlRoom() {
   // Re-optimization state
   const [isReoptimizing, setIsReoptimizing] = useState(false);
 
-  // Customer SMS Notification Modal
+  // Customer WhatsApp Notification Modal
   const [smsModalDelivery, setSmsModalDelivery] = useState(null);
+  const [smsPhone, setSmsPhone] = useState("");
   const [smsReason, setSmsReason] = useState("");
   const [smsEta, setSmsEta] = useState("");
   const [smsLang, setSmsLang] = useState("en");
-  const [isSendingSms, setIsSendingSms] = useState(false);
-  const [smsLogs, setSmsLogs] = useState([
-    {
-      id: "log-init-01",
-      deliveryCode: "DEL-MED-MTP-08",
-      customerName: "Mettupalayam Government Hospital",
-      phone: "+91 98450 11999",
-      body: "Hi Mettupalayam Govt Hospital, your KovaiSwift order DEL-MED-MTP-08 is delayed due to landslide near Kallar pass. Our driver is taking a safer route. Assured arrival: by 5:55 PM today. – KovaiSwift Logistics",
-      time: "10m ago",
-      status: "Delivered",
-    },
-  ]);
+  const [modalStep, setModalStep] = useState("compose"); // "compose" | "confirm" | "success"
+  const [phoneError, setPhoneError] = useState("");
+  const [isConfirming, setIsConfirming] = useState(false);
+  const [successData, setSuccessData] = useState(null);
+  const [smsLogs, setSmsLogs] = useState([]);
+
+  // Subscribe to Customer SMS / WhatsApp Audit Logs
+  useEffect(() => {
+    const unsub = subscribeSmsLogs((logs) => {
+      setSmsLogs(logs || []);
+    });
+    return unsub;
+  }, []);
+
+  // Live WhatsApp Preview using template builder (max 320 chars)
+  const smsPreviewText = useMemo(() => {
+    if (!smsModalDelivery) return "";
+    return buildCustomerSms({
+      customerName: smsModalDelivery.customerName,
+      code: smsModalDelivery.code,
+      reason: smsReason,
+      etaText: smsEta,
+      lang: smsLang,
+    });
+  }, [smsModalDelivery, smsReason, smsEta, smsLang]);
 
   // Bottom-Left Urgent Hazard Alert Card (Audio + Vibration)
   const [activeUrgentAlert, setActiveUrgentAlert] = useState(null);
@@ -495,16 +587,31 @@ function AdminControlRoom() {
     }
   };
 
-  // Open SMS modal for a delivery
+  // Open WhatsApp modal for a delivery
   const openSmsModal = (del) => {
     setSmsModalDelivery(del);
-    // Find closest hazard to prefill reason
+    setSmsPhone(del.customerPhone || "");
+    setModalStep("compose");
+    setPhoneError("");
+    setIsConfirming(false);
+    setSuccessData(null);
+
+    // Find closest hazard to delivery's driver (or delivery destination)
     let defaultReason = "heavy traffic congestion along arterial road";
-    if (hazards.length > 0) {
-      const active = hazards.filter((h) => h.active);
+    const assignedVehicle = del.assignedTo
+      ? vehicles.find((v) => v.uid === del.assignedTo || v.driverId === del.assignedTo)
+      : null;
+    const refPoint = assignedVehicle ? [assignedVehicle.lat, assignedVehicle.lng] : [del.lat, del.lng];
+
+    const allHazards = [...hazards, ...weatherHazards];
+    if (allHazards.length > 0) {
+      const active = allHazards.filter((h) => h.active !== false);
       if (active.length > 0) {
         const closest = active.reduce((best, h) => {
-          const d = haversineMeters([del.lat, del.lng], [h.lat, h.lng]);
+          const hLat = h.lat ?? h.location?.lat;
+          const hLng = h.lng ?? h.location?.lng;
+          if (typeof hLat !== "number" || typeof hLng !== "number") return best;
+          const d = haversineMeters(refPoint, [hLat, hLng]);
           if (!best || d < best.d) return { h, d };
           return best;
         }, null);
@@ -523,51 +630,110 @@ function AdminControlRoom() {
       }
     }
     setSmsReason(defaultReason);
-    setSmsEta(del.etaText || "by 4:45 PM today");
+    setSmsEta(del.etaText || "by 4:45 PM");
     setSmsLang(language === "ta" ? "ta" : "en");
   };
 
-  // Send Customer SMS
-  const handleSendCustomerSms = async () => {
-    if (!smsModalDelivery) return;
-    try {
-      setIsSendingSms(true);
-      const isTa = smsLang === "ta";
-      const smsText = isTa
-        ? `வணக்கம் ${smsModalDelivery.customerName}, உங்கள் கோவைஸ்விப்ட் டெலிவரி ${smsModalDelivery.code} ${smsReason} காரணமாக சிறிது தாமதமாகிறது. எங்கள் ஓட்டுநர் பாதுகாப்பான மாற்றுப்பாதையில் வருகிறார். உறுதிப்படுத்தப்பட்ட வருகை: ${smsEta}. – கோவைஸ்விப்ட் லாஜிஸ்டிக்ஸ்`
-        : `Hi ${smsModalDelivery.customerName}, your KovaiSwift order ${smsModalDelivery.code} is delayed due to ${smsReason}. Our driver is taking a safer route. Assured arrival: ${smsEta}. – KovaiSwift Logistics`;
+  const closeSmsModal = () => {
+    setSmsModalDelivery(null);
+    setModalStep("compose");
+    setPhoneError("");
+    setIsConfirming(false);
+    setSuccessData(null);
+  };
 
-      await sendCustomerSms({
-        to: smsModalDelivery.customerPhone,
-        body: smsText,
-        deliveryCode: smsModalDelivery.code,
+  // 1. One big green primary button: "Send on WhatsApp"
+  const handleSendOnWhatsApp = () => {
+    if (isConfirming) return;
+    const { valid, digits } = validateIndianPhone(smsPhone);
+    if (!valid) {
+      setPhoneError(
+        language === "ta"
+          ? "தொலைபேசி எண்ணைச் சரிபார்க்கவும்"
+          : "Check the phone number"
+      );
+      return;
+    }
+    setPhoneError("");
+
+    const encodedBody = encodeURIComponent(smsPreviewText);
+    const waUrl = `https://wa.me/${digits}?text=${encodedBody}`;
+
+    if (typeof window !== "undefined") {
+      window.open(waUrl, "_blank", "noopener,noreferrer");
+    }
+
+    setModalStep("confirm");
+  };
+
+  // 2. Re-open WhatsApp in new tab
+  const handleReopenWhatsApp = () => {
+    if (isConfirming) return;
+    const { valid, digits } = validateIndianPhone(smsPhone);
+    if (!valid) return;
+    const encodedBody = encodeURIComponent(smsPreviewText);
+    const waUrl = `https://wa.me/${digits}?text=${encodedBody}`;
+    if (typeof window !== "undefined") {
+      window.open(waUrl, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  // 3. Admin clicks "✓ Message sent"
+  const handleConfirmMessageSent = async () => {
+    if (!smsModalDelivery || isConfirming) return;
+    try {
+      setIsConfirming(true);
+      const { digits } = validateIndianPhone(smsPhone);
+      const sentTime = new Date();
+      const formattedSentTime = sentTime.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+      // Update delivery: etaText + status "delayed" + lastNotifiedAt + notifiedVia "whatsapp"
+      await updateDelivery(smsModalDelivery.id, {
+        etaText: smsEta,
+        status: "delayed",
+        customerPhone: smsPhone,
+        lastNotifiedAt: sentTime.toISOString(),
+        notifiedVia: "whatsapp",
       });
 
-      // Add to local SMS log
-      setSmsLogs((prev) => [
-        {
-          id: `log-${Date.now()}`,
-          deliveryCode: smsModalDelivery.code,
-          customerName: smsModalDelivery.customerName,
-          phone: smsModalDelivery.customerPhone,
-          body: smsText,
-          time: "Just now",
-          status: "Delivered",
-        },
-        ...prev,
-      ]);
+      // Add a log entry (smsLogs collection, channel "whatsapp", ok: true, to, body, deliveryCode, by, createdAt)
+      await logCustomerNotification({
+        to: smsPhone,
+        body: smsPreviewText,
+        deliveryCode: smsModalDelivery.code,
+        channel: "whatsapp",
+        ok: true,
+        by: profile?.name || "Admin Dispatch",
+        createdAt: sentTime.toISOString(),
+      });
 
+      // Refresh deliveries table
+      fetchDeliveries();
+
+      // Toast notification
       toast.success(
         language === "ta"
-          ? "வாடிக்கையாளருக்கு எஸ்எம்எஸ் அனுப்பப்பட்டது!"
-          : `Customer SMS sent to ${smsModalDelivery.customerName}!`
+          ? `${smsModalDelivery.customerName}க்கு வாட்ஸ்அப் தகவல் அனுப்பப்பட்டது ✓`
+          : `WhatsApp update sent to ${smsModalDelivery.customerName} ✓`
       );
-      setSmsModalDelivery(null);
+
+      // Transition to success screen
+      setSuccessData({
+        customerName: smsModalDelivery.customerName,
+        maskedPhone: maskPhoneNumber(smsPhone || digits),
+        etaText: smsEta,
+        time: formattedSentTime,
+      });
+      setModalStep("success");
     } catch (err) {
-      console.error("SMS send error:", err);
-      toast.error("Failed to send customer SMS");
+      console.error("Failed to confirm WhatsApp notification:", err);
+      toast.error(
+        language === "ta"
+          ? "நிலையைப் புதுப்பிப்பதில் தோல்வி"
+          : "Failed to update notification status"
+      );
     } finally {
-      setIsSendingSms(false);
+      setIsConfirming(false);
     }
   };
 
@@ -945,13 +1111,26 @@ function AdminControlRoom() {
                             />
                           </td>
                           <td className="p-3.5 pr-4 text-right">
-                            <button
-                              onClick={() => openSmsModal(del)}
-                              className="px-2.5 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/40 text-xs font-semibold flex items-center gap-1.5 ml-auto transition-all"
-                            >
-                              <Send className="w-3.5 h-3.5" />
-                              <span>{language === "ta" ? "SMS அனுப்பு" : "Notify Customer"}</span>
-                            </button>
+                            <div className="flex flex-col sm:flex-row items-end sm:items-center justify-end gap-2">
+                              {del.lastNotifiedAt && (
+                                <span
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm shrink-0"
+                                  title={`Notified via WhatsApp at ${formatLogTime(del.lastNotifiedAt)}`}
+                                >
+                                  <WhatsAppIcon className="w-3 h-3 fill-current text-emerald-400 shrink-0" />
+                                  <span>
+                                    {language === "ta" ? "அறிவிக்கப்பட்டது" : "Notified"} {formatLogTime(del.lastNotifiedAt)}
+                                  </span>
+                                </span>
+                              )}
+                              <button
+                                onClick={() => openSmsModal(del)}
+                                className="px-2.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-xs font-semibold flex items-center gap-1.5 ml-auto transition-all"
+                              >
+                                <WhatsAppIcon className="w-3.5 h-3.5 fill-current text-emerald-400" />
+                                <span>{language === "ta" ? "வாட்ஸ்அப் அறிவிப்பு" : "Notify Customer"}</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -962,21 +1141,21 @@ function AdminControlRoom() {
             </div>
           </div>
 
-          {/* SMS Broadcast Audit Log */}
+          {/* Customer Notifications Audit Log */}
           <div className="rounded-2xl border border-glass-border bg-slate-950/85 backdrop-blur-xl p-5 shadow-2xl flex flex-col gap-3">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-cyan-400" />
-              <span>{language === "ta" ? "வாடிக்கையாளர் SMS வரலாறு" : "Customer SMS Broadcast History"} ({smsLogs.length})</span>
+              <WhatsAppIcon className="w-4 h-4 fill-current text-emerald-400" />
+              <span>{language === "ta" ? "வாடிக்கையாளர் அறிவிப்புகள்" : "Customer notifications"} ({smsLogs.length})</span>
             </h3>
             <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
               {smsLogs.length === 0 ? (
                 <EmptyState
-                  icon={Send}
-                  title={language === "ta" ? "SMS வரலாறு இல்லை" : "No Broadcasts Recorded"}
+                  icon={WhatsAppIcon}
+                  title={language === "ta" ? "அறிவிப்புகள் எதுவும் பதிவு செய்யப்படவில்லை" : "No Notifications Recorded"}
                   description={
                     language === "ta"
-                      ? "வாடிக்கையாளர்களுக்கு அனுப்பப்பட்ட SMS தகவல்கள் இங்கே தோன்றும்."
-                      : "Delay alert logs dispatched to customers will appear here."
+                      ? "வாட்ஸ்அப் மூலம் வாடிக்கையாளர்களுக்கு அனுப்பப்பட்ட தாமத அறிவிப்புகள் இங்கே தோன்றும்."
+                      : "Delay alert logs dispatched to customers via WhatsApp will appear here."
                   }
                   compact
                 />
@@ -987,17 +1166,32 @@ function AdminControlRoom() {
                     className="p-3 rounded-xl bg-white/[0.02] border border-glass-border flex flex-col sm:flex-row sm:items-center justify-between gap-2"
                   >
                     <div className="flex flex-col gap-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-xs text-cyan-300">{log.deliveryCode}</span>
-                        <span className="text-xs text-slate-200 font-semibold">&bull; {log.customerName}</span>
-                        <span className="text-[11px] font-mono text-slate-400">({log.phone})</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`font-bold font-mono text-xs ${log.ok !== false ? "text-emerald-400" : "text-red-400"}`}>
+                          {log.ok !== false ? "✓" : "✕"}
+                        </span>
+                        <span
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                          title="WhatsApp"
+                        >
+                          <WhatsAppIcon className="w-3 h-3 fill-current text-emerald-400 shrink-0" />
+                          <span>WhatsApp</span>
+                        </span>
+                        <span className="font-mono font-bold text-xs text-cyan-300">{log.deliveryCode || "DEL"}</span>
+                        <span className="text-xs font-mono text-slate-300 font-semibold">{maskPhoneNumber(log.to || log.phone)}</span>
                       </div>
-                      <p className="text-xs text-slate-300 font-sans italic">&ldquo;{log.body}&rdquo;</p>
+                      <p className="text-xs text-slate-300 font-sans italic">
+                        &ldquo;{(log.body || "").slice(0, 60)}{(log.body || "").length > 60 ? "..." : ""}&rdquo;
+                      </p>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
-                      <span className="text-[11px] text-slate-400 font-mono">{log.time}</span>
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                        {log.status}
+                      <span className="text-[11px] text-slate-400 font-mono">{formatLogTime(log.createdAt || log.time)}</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        log.ok !== false
+                          ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                          : "bg-red-500/20 text-red-300 border border-red-500/30"
+                      }`}>
+                        {log.ok !== false ? (language === "ta" ? "அனுப்பப்பட்டது ✓" : "Delivered ✓") : (language === "ta" ? "தோல்வி ✕" : "Failed ✕")}
                       </span>
                     </div>
                   </div>
@@ -1716,106 +1910,310 @@ function AdminControlRoom() {
       )}
 
       {/* =========================================================================
-          MODAL 2: 📩 NOTIFY CUSTOMER SMS MODAL & LIVE PREVIEW
+          MODAL 2: 💬 NOTIFY CUSTOMER ON WHATSAPP & CONFIRMATION FLOW
       ========================================================================= */}
       {smsModalDelivery && (
         <Modal
           isOpen={!!smsModalDelivery}
-          onClose={() => setSmsModalDelivery(null)}
-          title={`Notify Customer · ${smsModalDelivery.customerName}`}
-          description={`Order #${smsModalDelivery.code} Delay Broadcast & Assured ETA`}
+          onClose={closeSmsModal}
+          title={
+            language === "ta"
+              ? `வாட்ஸ்அப்பில் வாடிக்கையாளருக்கு அறிவிக்கவும் · ${smsModalDelivery.customerName}`
+              : `Notify Customer on WhatsApp · ${smsModalDelivery.customerName}`
+          }
+          description={
+            language === "ta"
+              ? `ஆர்டர் #${smsModalDelivery.code} தாமத அறிவிப்பு மற்றும் உறுதிசெய்யப்பட்ட வருகை நேரம்`
+              : `Order #${smsModalDelivery.code} Delay Broadcast & Assured ETA`
+          }
           size="lg"
         >
-          <div className="flex flex-col gap-4">
-            {/* Form Inputs */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {modalStep === "compose" && (
+            <div className="flex flex-col gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* Customer Phone (Editable with validation) */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">
+                    {language === "ta" ? "வாடிக்கையாளர் வாட்ஸ்அப் எண்:" : "Customer Phone (WhatsApp):"}
+                  </label>
+                  <input
+                    type="text"
+                    value={smsPhone}
+                    onChange={(e) => {
+                      setSmsPhone(e.target.value);
+                      if (phoneError) setPhoneError("");
+                    }}
+                    placeholder="+91 98450 11999"
+                    className={`w-full px-3 py-2 rounded-xl bg-white/5 border text-xs text-slate-200 focus:outline-none transition-all ${
+                      phoneError ? "border-red-500/80 bg-red-500/10 focus:border-red-400" : "border-glass-border focus:border-emerald-400"
+                    }`}
+                  />
+                  {phoneError && (
+                    <p className="mt-1 text-xs text-red-400 flex items-center gap-1 font-semibold animate-in fade-in">
+                      <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{phoneError}</span>
+                    </p>
+                  )}
+                </div>
+
+                {/* Assured Arrival ETA */}
+                <div>
+                  <label className="text-xs font-semibold text-slate-300 block mb-1">
+                    {language === "ta" ? "உறுதிசெய்யப்பட்ட வருகை நேரம்:" : "Assured Arrival ETA:"}
+                  </label>
+                  <input
+                    type="text"
+                    value={smsEta}
+                    onChange={(e) => setSmsEta(e.target.value)}
+                    placeholder="by 4:45 PM"
+                    className="w-full px-3 py-2 rounded-xl bg-white/5 border border-glass-border text-xs text-slate-200 focus:outline-none focus:border-emerald-400"
+                  />
+                </div>
+              </div>
+
+              {/* Delay Reason (Prefilled from hazard) */}
               <div>
                 <label className="text-xs font-semibold text-slate-300 block mb-1">
-                  Delay Reason (Prefilled from Hazard):
+                  {language === "ta" ? "தாமதத்திற்கான காரணம் (விபத்து/தடை மூலம் பெறப்பட்டது):" : "Delay Reason (Prefilled from Hazard):"}
                 </label>
                 <input
                   type="text"
                   value={smsReason}
                   onChange={(e) => setSmsReason(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-white/5 border border-glass-border text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
+                  className="w-full px-3 py-2 rounded-xl bg-white/5 border border-glass-border text-xs text-slate-200 focus:outline-none focus:border-emerald-400"
                 />
+              </div>
+
+              {/* Language Selector: English / தமிழ் */}
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-300">
+                  {language === "ta" ? "செய்தி மொழி:" : "Broadcast Language:"}
+                </span>
+                <div className="flex items-center gap-1.5 p-1 rounded-xl bg-white/5 border border-glass-border">
+                  <button
+                    type="button"
+                    onClick={() => setSmsLang("en")}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      smsLang === "en" ? "bg-emerald-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    English
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSmsLang("ta")}
+                    className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
+                      smsLang === "ta" ? "bg-emerald-500 text-slate-950 shadow" : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    தமிழ் (Tamil)
+                  </button>
+                </div>
+              </div>
+
+              {/* Live WhatsApp Preview Box with WhatsApp Icon and Green Chat Bubble */}
+              <div className="p-3.5 rounded-2xl bg-[#0b141a] border border-emerald-500/30 shadow-2xl flex flex-col gap-2 relative overflow-hidden">
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-full bg-emerald-600 flex items-center justify-center">
+                      <WhatsAppIcon className="w-3.5 h-3.5 fill-current text-white" />
+                    </div>
+                    <div>
+                      <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
+                        {language === "ta" ? "வாட்ஸ்அப் செய்தி முன்னோட்டம்" : "WhatsApp message preview"}
+                      </span>
+                      <span className="text-[10px] text-slate-400 block font-mono">
+                        {smsPhone || smsModalDelivery.customerPhone || "Recipient"}
+                      </span>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-400/80 bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-500/30">
+                    {smsPreviewText.length} / 320 chars
+                  </span>
+                </div>
+
+                {/* WhatsApp-Style Green Chat Bubble */}
+                <div className="py-2 px-1 flex flex-col items-end">
+                  <div className="max-w-[92%] sm:max-w-[85%] bg-[#005c4b] text-[#e9edef] rounded-2xl rounded-tr-sm p-3.5 shadow-md relative border border-emerald-400/20">
+                    <p className="text-xs font-sans leading-relaxed whitespace-pre-wrap select-text">
+                      {smsPreviewText}
+                    </p>
+                    <div className="flex items-center justify-end gap-1 mt-1.5 text-[10px] text-emerald-200/80 font-mono">
+                      <span>{currentTime}</span>
+                      <span className="text-[#53bdeb] font-bold tracking-tighter text-xs">✓✓</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Compose Actions: Cancel + Big Green Primary Button "Send on WhatsApp" */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-glass-border">
+                <Button
+                  variant="secondary"
+                  size="md"
+                  onClick={closeSmsModal}
+                  disabled={isConfirming}
+                >
+                  {language === "ta" ? "ரத்துசெய்" : "Cancel"}
+                </Button>
+
+                <button
+                  type="button"
+                  onClick={handleSendOnWhatsApp}
+                  disabled={isConfirming}
+                  className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-emerald-950/40 hover:shadow-emerald-500/20 transition-all cursor-pointer"
+                >
+                  <WhatsAppIcon className="w-5 h-5 fill-current text-white shrink-0" />
+                  <span>{language === "ta" ? "வாட்ஸ்அப்பில் அனுப்பு" : "Send on WhatsApp"}</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {modalStep === "confirm" && (
+            <div className="flex flex-col gap-4">
+              {/* Confirmation Status Banner */}
+              <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0 mt-0.5">
+                  <WhatsAppIcon className="w-5 h-5 fill-current text-emerald-400" />
+                </div>
+                <div className="flex-1">
+                  <h4 className="text-sm font-bold text-emerald-300">
+                    {language === "ta" ? "வாட்ஸ்அப் திறக்கப்பட்டது" : "WhatsApp opened with the message"}
+                  </h4>
+                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                    {language === "ta"
+                      ? "செய்தியுடன் வாட்ஸ்அப் திறக்கப்பட்டது. வாட்ஸ்அப்பில் அனுப்பு (Send) என்பதைத் தட்டிவிட்டு, பின்னர் இங்கே உறுதிப்படுத்தவும்."
+                      : "WhatsApp opened with the message. Tap Send in WhatsApp, then confirm here."}
+                  </p>
+                </div>
+              </div>
+
+              {/* Target & Preview Snippet */}
+              <div className="p-4 rounded-2xl bg-white/[0.02] border border-glass-border flex flex-col gap-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-400 font-semibold">{language === "ta" ? "பெறுநர்:" : "Recipient:"}</span>
+                  <span className="font-mono font-bold text-emerald-400">{maskPhoneNumber(smsPhone)}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-400 font-semibold">{language === "ta" ? "ஆர்டர் குறியீடு:" : "Delivery Order:"}</span>
+                  <span className="font-mono font-bold text-cyan-300">{smsModalDelivery.code}</span>
+                </div>
+                <div className="p-3 rounded-xl bg-black/40 border border-glass-border text-xs text-slate-300 italic font-sans leading-relaxed">
+                  &ldquo;{smsPreviewText}&rdquo;
+                </div>
+              </div>
+
+              {/* Confirm State Actions */}
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-glass-border">
+                <button
+                  type="button"
+                  onClick={() => setModalStep("compose")}
+                  disabled={isConfirming}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-all"
+                >
+                  {language === "ta" ? "செய்தியைத் திருத்து" : "Edit message"}
+                </button>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleReopenWhatsApp}
+                    disabled={isConfirming}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-2 transition-all"
+                  >
+                    <WhatsAppIcon className="w-4 h-4 fill-current text-emerald-400 shrink-0" />
+                    <span>{language === "ta" ? "மீண்டும் வாட்ஸ்அப்பைத் திறக்கவும்" : "Open WhatsApp again"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleConfirmMessageSent}
+                    disabled={isConfirming}
+                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold text-xs flex items-center gap-2 shadow-lg shadow-emerald-950/40 transition-all cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-4 h-4 text-white shrink-0" />
+                    <span>{isConfirming ? (language === "ta" ? "பதிவு செய்யப்படுகிறது..." : "Recording...") : (language === "ta" ? "✓ செய்தி அனுப்பப்பட்டது" : "✓ Message sent")}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {modalStep === "success" && (
+            <div className="py-6 flex flex-col items-center justify-center text-center gap-4 animate-in zoom-in-95 duration-300">
+              {/* Big Green Check Animation */}
+              <div className="relative">
+                <div className="w-20 h-20 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center animate-pulse">
+                  <div className="w-14 h-14 rounded-full bg-emerald-500 flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.8)]">
+                    <CheckCircle2 className="w-9 h-9 text-slate-950" />
+                  </div>
+                </div>
+                <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-[#075e54] border-2 border-slate-950 flex items-center justify-center">
+                  <WhatsAppIcon className="w-4 h-4 fill-current text-white" />
+                </div>
               </div>
 
               <div>
-                <label className="text-xs font-semibold text-slate-300 block mb-1">
-                  Assured Arrival ETA:
-                </label>
-                <input
-                  type="text"
-                  value={smsEta}
-                  onChange={(e) => setSmsEta(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl bg-white/5 border border-glass-border text-xs text-slate-200 focus:outline-none focus:border-cyan-400"
-                />
+                <h3 className="text-lg font-extrabold text-white">
+                  {language === "ta" ? "வாட்ஸ்அப்பில் வாடிக்கையாளருக்கு அறிவிக்கப்பட்டது ✓" : "Customer notified on WhatsApp ✓"}
+                </h3>
+                <p className="text-xs text-emerald-300 font-medium mt-1">
+                  {language === "ta"
+                    ? "டெலிவரி தாமத தகவல் வாடிக்கையாளருக்கு வெற்றிகரமாக உறுதிசெய்யப்பட்டது."
+                    : "Delivery delay advisory verified and logged to dispatch audit."}
+                </p>
               </div>
-            </div>
 
-            {/* Language Selector */}
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold text-slate-300">Broadcast Language:</span>
-              <div className="flex items-center gap-1.5 p-1 rounded-xl bg-white/5 border border-glass-border">
+              {/* Customer, Masked Phone, ETA, Time Information */}
+              <div className="w-full max-w-md p-4 rounded-2xl bg-white/[0.03] border border-glass-border grid grid-cols-2 gap-3 text-left">
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                    {language === "ta" ? "வாடிக்கையாளர்" : "Customer"}
+                  </span>
+                  <span className="text-xs font-semibold text-slate-100">
+                    {successData?.customerName || smsModalDelivery?.customerName}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                    {language === "ta" ? "தொலைபேசி எண்" : "Masked Number"}
+                  </span>
+                  <span className="text-xs font-mono font-semibold text-emerald-400">
+                    {successData?.maskedPhone || maskPhoneNumber(smsPhone)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                    {language === "ta" ? "உறுதிசெய்யப்பட்ட வருகை" : "Assured ETA"}
+                  </span>
+                  <span className="text-xs font-semibold text-cyan-300">
+                    {successData?.etaText || smsEta}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                    {language === "ta" ? "நேரம்" : "Notification Time"}
+                  </span>
+                  <span className="text-xs font-mono text-slate-200">
+                    {successData?.time || currentTime}
+                  </span>
+                </div>
+              </div>
+
+              {/* Done Button */}
+              <div className="w-full max-w-md pt-2">
                 <button
                   type="button"
-                  onClick={() => setSmsLang("en")}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    smsLang === "en" ? "bg-cyan-500 text-slate-950" : "text-slate-400"
-                  }`}
+                  onClick={closeSmsModal}
+                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/40 transition-all cursor-pointer"
                 >
-                  English
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSmsLang("ta")}
-                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                    smsLang === "ta" ? "bg-cyan-500 text-slate-950" : "text-slate-400"
-                  }`}
-                >
-                  தமிழ் (Tamil)
+                  <CheckCircle2 className="w-4 h-4 text-white" />
+                  <span>{language === "ta" ? "முடிந்தது" : "Done"}</span>
                 </button>
               </div>
             </div>
-
-            {/* LIVE SMS PREVIEW CARD */}
-            <div className="p-4 rounded-2xl bg-slate-950 border border-emerald-500/30 shadow-2xl flex flex-col gap-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  Live SMS Gateway Preview &bull; {smsModalDelivery.customerPhone}
-                </span>
-                <span className="text-[10px] font-mono text-slate-400">Twilio / Karix SMS</span>
-              </div>
-
-              <div className="p-3 rounded-xl bg-emerald-950/20 border border-emerald-500/20 text-xs text-slate-200 font-sans leading-relaxed">
-                {smsLang === "ta"
-                  ? `வணக்கம் ${smsModalDelivery.customerName}, உங்கள் கோவைஸ்விப்ட் டெலிவரி ${smsModalDelivery.code} ${smsReason} காரணமாக சிறிது தாமதமாகிறது. எங்கள் ஓட்டுநர் பாதுகாப்பான மாற்றுப்பாதையில் வருகிறார். உறுதிப்படுத்தப்பட்ட வருகை: ${smsEta}. – கோவைஸ்விப்ட் லாஜிஸ்டிக்ஸ்`
-                  : `Hi ${smsModalDelivery.customerName}, your KovaiSwift order ${smsModalDelivery.code} is delayed due to ${smsReason}. Our driver is taking a safer route. Assured arrival: ${smsEta}. – KovaiSwift Logistics`}
-              </div>
-            </div>
-
-            {/* Modal Actions */}
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <Button
-                variant="secondary"
-                size="md"
-                onClick={() => setSmsModalDelivery(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                size="md"
-                onClick={handleSendCustomerSms}
-                disabled={isSendingSms}
-                icon={Send}
-              >
-                {isSendingSms ? "Dispatching..." : "Send Customer SMS"}
-              </Button>
-            </div>
-          </div>
+          )}
         </Modal>
       )}
     </div>

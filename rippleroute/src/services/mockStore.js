@@ -130,6 +130,8 @@ export const INITIAL_DELIVERIES = [
     status: "delayed",
     assignedTo: "sim-drv-03",
     etaText: "by 5:55 PM (Delayed)",
+    lastNotifiedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    notifiedVia: "whatsapp",
   },
 ];
 
@@ -195,6 +197,20 @@ class MockStore {
     this.hazards = JSON.parse(JSON.stringify(INITIAL_HAZARDS));
     this.liveLocations = new Map();
     this.messages = [];
+    this.smsLogs = [
+      {
+        id: "log-init-01",
+        deliveryCode: "DEL-MED-MTP-08",
+        customerName: "Mettupalayam Government Hospital",
+        to: "+91 98450 11999",
+        body: "Hi Mettupalayam Govt Hospital, your KovaiSwift order DEL-MED-MTP-08 is delayed due to landslide near Kallar pass. Our driver is taking a safer route. Assured arrival: by 5:55 PM today. – KovaiSwift Logistics",
+        ok: true,
+        sid: "WA_init_01",
+        channel: "whatsapp",
+        createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+      },
+    ];
+    this.smsSubscribers = new Set();
 
     // Initialize 4 simulated drivers requested for the control room
     this.simulatedDrivers = new Map();
@@ -487,6 +503,41 @@ class MockStore {
         m.toUid === "all" ||
         uid === "admin"
     );
+  }
+
+  logSms(entry) {
+    const log = {
+      id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      to: entry.to || "",
+      body: entry.body || "",
+      deliveryCode: entry.deliveryCode || "",
+      ok: Boolean(entry.ok),
+      sid: entry.sid || "",
+      error: entry.error || "",
+      channel: entry.channel || "whatsapp",
+      by: entry.by || "admin",
+      createdAt: entry.createdAt || new Date().toISOString(),
+    };
+    this.smsLogs.unshift(log);
+    this._notifySmsLogs();
+    return log;
+  }
+
+  subscribeSmsLogs(cb) {
+    if (typeof cb !== "function") return () => {};
+    cb([...this.smsLogs]);
+    this.smsSubscribers.add(cb);
+    return () => this.smsSubscribers.delete(cb);
+  }
+
+  _notifySmsLogs() {
+    for (const cb of this.smsSubscribers) {
+      try {
+        cb([...this.smsLogs]);
+      } catch (e) {
+        console.error("[_notifySmsLogs] callback error:", e);
+      }
+    }
   }
 }
 
