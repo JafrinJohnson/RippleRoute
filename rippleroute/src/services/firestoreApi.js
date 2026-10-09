@@ -217,6 +217,9 @@ export async function updateLiveLocation(profile, pos) {
         heading: Number(pos.heading) || 0,
         status: pos.status || "active",
         destination: pos.destination || null,
+        progress: Number(pos.progress) || 0,
+        etaMinutes: Number(pos.etaMinutes) || 0,
+        remainingM: Number(pos.remainingM) || 0,
         updatedAt: serverTimestamp(),
       },
       { merge: true }
@@ -328,6 +331,93 @@ export function subscribeLiveLocations(cb) {
     clearInterval(ticker);
   };
 }
+
+// =========================================================================
+// 3b. ROUTE OVERRIDES (control room -> driver)
+// Firestore forbids nested arrays, so coords are stored as [{lat,lng}].
+// =========================================================================
+
+function coordsToObjects(coords) {
+  if (!Array.isArray(coords)) return [];
+  return coords
+    .map((c) =>
+      Array.isArray(c)
+        ? { lat: Number(c[0]), lng: Number(c[1]) }
+        : { lat: Number(c?.lat), lng: Number(c?.lng) }
+    )
+    .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng));
+}
+
+function coordsToArrays(coords) {
+  if (!Array.isArray(coords)) return [];
+  return coords
+    .map((c) => (Array.isArray(c) ? [Number(c[0]), Number(c[1])] : [Number(c?.lat), Number(c?.lng)]))
+    .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+}
+
+export async function setRouteOverride(uid, data) {
+  if (!db || !uid || !data?.route) return { ok: false, error: "Invalid override" };
+  try {
+    const r = data.route;
+    await setDoc(doc(db, "routeOverrides", uid), {
+      reason: data.reason || "Control room optimization",
+      timeSavedMin: Number(data.timeSavedMin) || 0,
+      byName: data.byName || "Control Room",
+      route: {
+        id: r.id || `override-${Date.now()}`,
+        coords: coordsToObjects(r.coords),
+        distanceM: Number(r.distanceM) || 0,
+        durationS: Number(r.durationS) || 0,
+      },
+      createdAt: serverTimestamp(),
+      acknowledged: false,
+    });
+    return { ok: true };
+  } catch (err) {
+    console.warn("[firestoreApi] setRouteOverride error:", err);
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+export function subscribeRouteOverride(uid, cb) {
+  if (typeof cb !== "function" || !uid) return () => {};
+  if (!db) return mockStore.subscribeRouteOverride(uid, cb);
+  try {
+    return onSnapshot(
+      doc(db, "routeOverrides", uid),
+      (snap) => {
+        if (!snap.exists()) {
+          cb(null);
+          return;
+        }
+        const d = snap.data();
+        cb({
+          ...d,
+          createdAt: toMillis(d.createdAt),
+          route: d.route ? { ...d.route, coords: coordsToArrays(d.route.coords) } : null,
+        });
+      },
+      (err) => {
+        console.warn("[firestoreApi] subscribeRouteOverride error:", err);
+      }
+    );
+  } catch (err) {
+    console.warn("[firestoreApi] subscribeRouteOverride setup error:", err);
+    return () => {};
+  }
+}
+
+export async function acknowledgeRouteOverride(uid) {
+  if (!db || !uid) return { ok: false };
+  try {
+    await updateDoc(doc(db, "routeOverrides", uid), { acknowledged: true });
+    return { ok: true };
+  } catch (err) {
+    console.warn("[firestoreApi] acknowledgeRouteOverride error:", err);
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
 
 // =========================================================================
 // 4. MESSAGES & DISPATCH COMMS

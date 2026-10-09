@@ -211,6 +211,8 @@ class MockStore {
       },
     ];
     this.smsSubscribers = new Set();
+    this.routeOverrides = new Map();
+    this.routeOverrideSubscribers = new Map(); // uid -> Set<cb>
 
     // Initialize 4 simulated drivers requested for the control room
     this.simulatedDrivers = new Map();
@@ -418,6 +420,7 @@ class MockStore {
       uid,
       name: profile?.name || "Driver",
       vehicleNumber: profile?.vehicleNumber || "TN-37-XX",
+      phone: profile?.phone || "",
       role: profile?.role || "driver",
       priority: profile?.priority || "normal",
       lat: Number(loc.lat),
@@ -425,8 +428,76 @@ class MockStore {
       heading: Number(loc.heading) || 0,
       status: loc.status || "active",
       destination: loc.destination || null,
+      progress: Number(loc.progress) || 0,
+      etaMinutes: Number(loc.etaMinutes) || 0,
+      remainingM: Number(loc.remainingM) || 0,
       updatedAt: Date.now(),
     });
+    return true;
+  }
+
+  // ---- Route overrides (control room -> driver) ----
+  setRouteOverride(uid, data) {
+    const entry = { ...data, createdAt: Date.now(), acknowledged: false };
+    this.routeOverrides.set(uid, entry);
+    this._notifyRouteOverride(uid);
+    return true;
+  }
+
+  subscribeRouteOverride(uid, cb) {
+    if (typeof cb !== "function" || !uid) return () => {};
+    if (!this.routeOverrideSubscribers.has(uid)) {
+      this.routeOverrideSubscribers.set(uid, new Set());
+    }
+    this.routeOverrideSubscribers.get(uid).add(cb);
+    const cur = this.routeOverrides.get(uid);
+    cb(cur ? JSON.parse(JSON.stringify(cur)) : null);
+    return () => {
+      this.routeOverrideSubscribers.get(uid)?.delete(cb);
+    };
+  }
+
+  acknowledgeRouteOverride(uid) {
+    const cur = this.routeOverrides.get(uid);
+    if (!cur) return false;
+    this.routeOverrides.set(uid, { ...cur, acknowledged: true });
+    this._notifyRouteOverride(uid);
+    return true;
+  }
+
+  _notifyRouteOverride(uid) {
+    const subs = this.routeOverrideSubscribers.get(uid);
+    if (!subs) return;
+    const cur = this.routeOverrides.get(uid);
+    const payload = cur ? JSON.parse(JSON.stringify(cur)) : null;
+    for (const cb of subs) {
+      try {
+        cb(payload);
+      } catch (e) {
+        console.error("[_notifyRouteOverride] callback error:", e);
+      }
+    }
+  }
+
+  /**
+   * Re-run a simulated demo truck on a new road route (local only, no Firestore).
+   * coords: [[lat,lng], ...] real road geometry starting at the truck's position.
+   */
+  rerouteSimulatedDriver(uid, coords) {
+    const driver = this.simulatedDrivers.get(uid);
+    if (!driver || !Array.isArray(coords) || coords.length < 2) return false;
+    const path = buildPath(coords);
+    if (!path || path.totalDistance <= 0) return false;
+    driver.path = path;
+    driver.currentDistM = 0;
+    driver.totalDistanceM = path.totalDistance;
+    driver.progress = 0;
+    driver.status = "on_time";
+    const pt = pointAtDistance(path, 0);
+    driver.lat = pt.lat;
+    driver.lng = pt.lng;
+    driver.heading = pt.heading;
+    driver.updatedAt = Date.now();
     return true;
   }
 

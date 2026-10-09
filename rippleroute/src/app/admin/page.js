@@ -23,6 +23,8 @@ import {
   subscribeLiveLocations,
   sendMessage,
   subscribeMessages,
+  setRouteOverride,
+  rerouteSimulatedDriver,
   logCustomerNotification,
   subscribeSmsLogs,
   DEPOT_PEELAMEDU,
@@ -547,36 +549,86 @@ function AdminControlRoom() {
   // In-flight guard for re-optimizing
   const isReoptimizingRef = useRef(false);
 
-  // Handle Re-optimize Driver Route via QARS
+  // Handle Re-optimize Driver Route via QARS (single planRoutes + runQars, then push to driver)
   const handleReoptimizeDriver = async () => {
     if (!selectedDriver) return;
     if (isReoptimizingRef.current) return;
+
+    const dest =
+      selectedDriver.destination && typeof selectedDriver.destination.lat === "number"
+        ? { lat: selectedDriver.destination.lat, lng: selectedDriver.destination.lng }
+        : selectedDriver.destinationCoords || null;
+    if (!dest || typeof dest.lat !== "number" || typeof dest.lng !== "number") {
+      toast.info(
+        language === "ta"
+          ? "இந்த ஓட்டுநருக்கு செயலில் உள்ள விநியோகம் இல்லை"
+          : "This driver has no active delivery"
+      );
+      return;
+    }
+
     isReoptimizingRef.current = true;
     try {
       setIsReoptimizing(true);
-      // Plan candidates from driver's current position to destination
-      const dest = selectedDriver.destinationCoords || { lat: 11.0168, lng: 76.9670 };
-      const routesRes = await planRoutes({ lat: selectedDriver.lat, lng: selectedDriver.lng }, dest);
+      const from = { lat: selectedDriver.lat, lng: selectedDriver.lng };
+      const activeHazards = hazards.filter((h) => h.active !== false);
+      const routesRes = await planRoutes(from, dest);
+      if (!routesRes?.routes?.length) {
+        toast.error(
+          language === "ta" ? "சாலை வழிகளை ஏற்ற முடியவில்லை" : "Could not load road routes"
+        );
+        return;
+      }
 
-      await runQars({
-        from: { lat: selectedDriver.lat, lng: selectedDriver.lng },
+      const qres = await runQars({
+        from,
         to: dest,
         routes: routesRes.routes,
-        hazards,
+        hazards: activeHazards,
         priority: selectedDriver.priority,
       });
+      const best = qres?.best;
+      if (!best || !Array.isArray(best.coords) || best.coords.length < 2) {
+        toast.error("Failed to compute new route");
+        return;
+      }
+      const timeSavedMin = Number(qres.timeSavedMin) || 0;
 
-      // Send dispatch notification message to the driver
-      await sendMessage(
-        profile?.uid || "admin",
-        selectedDriver.uid,
-        `QARS ADVISORY: Dynamic bypass synthesized. Avoid reported incident. Reroute corridor confirmed.`
-      );
+      const isSim = String(selectedDriver.uid || "").startsWith("sim-drv-");
+      if (isSim) {
+        // Demo trucks: re-run animation locally on the new road route (no Firestore write)
+        rerouteSimulatedDriver(selectedDriver.uid, best.coords);
+      } else {
+        let reason = "Control room optimization";
+        let minD = Infinity;
+        for (const h of activeHazards) {
+          const d = haversineMeters(from, { lat: h.lat, lng: h.lng });
+          if (d < minD) {
+            minD = d;
+            reason = h.note || `${String(h.type || "hazard").toUpperCase()} reported ahead`;
+          }
+        }
+        const res = await setRouteOverride(selectedDriver.uid, {
+          route: {
+            id: best.id,
+            coords: best.coords,
+            distanceM: best.distanceM,
+            durationS: best.durationS,
+          },
+          reason,
+          timeSavedMin,
+          byName: profile?.name || "Control Room",
+        });
+        if (!res?.ok) {
+          toast.error(res?.error || "Failed to send route to driver");
+          return;
+        }
+      }
 
       toast.success(
         language === "ta"
-          ? `புதிய பாதை ${selectedDriver.name} அவர்களுக்கு அனுப்பப்பட்டது!`
-          : `New route sent to ${selectedDriver.name}!`
+          ? `📡 புதிய பாதை ${selectedDriver.name} அவர்களுக்கு அனுப்பப்பட்டது — ${timeSavedMin} நிமிடம் சேமிப்பு`
+          : `📡 New route sent to ${selectedDriver.name} — saves ${timeSavedMin} min`
       );
     } catch (err) {
       console.error("Re-optimize error:", err);
@@ -1286,7 +1338,7 @@ function AdminControlRoom() {
                     driver.role === "emergency" ||
                     driver.priority === "medical" ||
                     driver.priority === "food";
-                  const isDelayed = driver.status === "delayed" || driver.status === "at_risk";
+                  const isDelayed = driver.status === "delayed" || driver.status === "issue";
 
                   return (
                     <div
@@ -1313,6 +1365,8 @@ function AdminControlRoom() {
                                 ? "bg-red-500 animate-ping"
                                 : driver.status === "at_risk"
                                 ? "bg-amber-400"
+                                : driver.status === "delivered"
+                                ? "bg-sky-400"
                                 : "bg-emerald-400"
                             }`}
                           />
@@ -1632,8 +1686,18 @@ function AdminControlRoom() {
                   <div className="flex items-center justify-between text-xs pt-2 border-t border-glass-border/60">
                     <span className="text-slate-400">Status:</span>
                     <span className="font-bold text-slate-200 capitalize flex items-center gap-1.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                      {selectedDriver.status || "In Transit"}
+                      <span
+                        className={`w-2 h-2 rounded-full ${
+                          selectedDriver.status === "issue" || selectedDriver.status === "delayed"
+                            ? "bg-red-500"
+                            : selectedDriver.status === "at_risk"
+                            ? "bg-amber-400"
+                            : selectedDriver.status === "delivered"
+                            ? "bg-sky-400"
+                            : "bg-emerald-400"
+                        }`}
+                      />
+                      {String(selectedDriver.status || "In Transit").replace("_", " ")}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
@@ -1653,7 +1717,9 @@ function AdminControlRoom() {
                     </span>
                   </div>
                   <div className="text-xs font-semibold text-slate-200">
-                    {selectedDriver.destination || "Gandhipuram Logistics Hub"}
+                    {(typeof selectedDriver.destination === "object" && selectedDriver.destination
+                      ? selectedDriver.destination.label
+                      : selectedDriver.destination) || "Gandhipuram Logistics Hub"}
                   </div>
                   <div className="text-[11px] text-slate-400">
                     Cargo:{" "}

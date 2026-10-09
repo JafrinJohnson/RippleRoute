@@ -94,6 +94,9 @@ function createVehicleDivIcon(vehicle, isSelected) {
   } else if (status === "delayed" || status === "issue" || status === "disrupted") {
     color = "#EF4444";
     bgRgba = "rgba(239, 68, 68, 0.28)";
+  } else if (status === "delivered") {
+    color = "#38BDF8";
+    bgRgba = "rgba(56, 189, 248, 0.25)";
   } else if (status === "idle") {
     color = "#94A3B8";
     bgRgba = "rgba(148, 163, 184, 0.20)";

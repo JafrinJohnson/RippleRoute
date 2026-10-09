@@ -434,6 +434,59 @@ export function subscribeLiveLocations(cb) {
 }
 
 /**
+ * 5b. Route Overrides (control room -> driver)
+ * coords are [[lat,lng]] in app code; Firestore stores [{lat,lng}] internally.
+ */
+export async function setRouteOverride(uid, { route, reason, timeSavedMin, byName } = {}) {
+  if (!uid || !route || !Array.isArray(route.coords) || route.coords.length < 2) {
+    return { ok: false, error: "Invalid route override" };
+  }
+  const payload = { route, reason, timeSavedMin, byName };
+  try {
+    if (isFirebaseConfigured) {
+      return await firestoreApi.setRouteOverride(uid, payload);
+    }
+    mockStore.setRouteOverride(uid, {
+      reason: reason || "Control room optimization",
+      timeSavedMin: Number(timeSavedMin) || 0,
+      byName: byName || "Control Room",
+      route: {
+        id: route.id || `override-${Date.now()}`,
+        coords: route.coords,
+        distanceM: Number(route.distanceM) || 0,
+        durationS: Number(route.durationS) || 0,
+      },
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+export function subscribeRouteOverride(uid, cb) {
+  if (isFirebaseConfigured) {
+    return firestoreApi.subscribeRouteOverride(uid, cb);
+  }
+  return mockStore.subscribeRouteOverride(uid, cb);
+}
+
+export async function acknowledgeRouteOverride(uid) {
+  try {
+    if (isFirebaseConfigured) {
+      return await firestoreApi.acknowledgeRouteOverride(uid);
+    }
+    return { ok: Boolean(mockStore.acknowledgeRouteOverride(uid)) };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/** Local-only: re-run a simulated demo truck on a new road route (no Firestore write). */
+export function rerouteSimulatedDriver(uid, coords) {
+  return Boolean(mockStore.rerouteSimulatedDriver(uid, coords));
+}
+
+/**
  * 6. Messages & Dispatch Comms
  */
 export async function sendMessage(fromUid, toUid, text, fromName = "") {

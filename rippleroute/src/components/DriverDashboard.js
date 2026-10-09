@@ -23,8 +23,10 @@ import {
   updateLiveLocation,
   sendMessage,
   subscribeMessages,
+  subscribeRouteOverride,
+  acknowledgeRouteOverride,
 } from "@/services/api";
-import { haversineMeters, minDistanceToPolylineMeters, samplePolyline } from "@/lib/geo";
+import { haversineMeters, minDistanceToPolylineMeters, samplePolyline, polylineLengthMeters } from "@/lib/geo";
 import { routeCost } from "@/lib/routeCost";
 import { buildPath, pointAtDistance } from "@/lib/routeAnimator";
 import useRouteMover from "@/hooks/useRouteMover";
@@ -162,6 +164,17 @@ export default function DriverDashboard({ mode = "driver" }) {
   useEffect(() => {
     selectedRouteIndexRef.current = selectedRouteIndex;
   }, [selectedRouteIndex]);
+
+  // Driver-reported issue flag (report hazard / Inform company) -> liveLocations status "issue"
+  const [hasIssue, setHasIssue] = useState(false);
+  const hasIssueRef = useRef(false);
+  const markIssue = useCallback((v) => {
+    hasIssueRef.current = v;
+    setHasIssue(v);
+  }, []);
+  const activeRouteRef = useRef(null);
+  const handledOverrideRef = useRef(null);
+  const applyOverrideRef = useRef(null);
 
   const moverRef = useRef(null);
   const demoSpeedFactorRef = useRef(demoSpeedFactor);
@@ -444,6 +457,7 @@ export default function DriverDashboard({ mode = "driver" }) {
   const moverCoords = useMemo(() => {
     return activeRoute?.coords || [];
   }, [activeRoute]);
+  activeRouteRef.current = activeRoute;
 
   // Delivered callback when mover reaches the destination
   const handleTripFinished = useCallback(async () => {
@@ -830,6 +844,7 @@ export default function DriverDashboard({ mode = "driver" }) {
   const handleResetTrip = () => {
     mover.reset();
     setTripStatus("open");
+    markIssue(false);
     toast.info(locale === "ta" ? "பயணம் மீட்டமைக்கப்பட்டது" : "Trip reset to start");
   };
 
@@ -952,6 +967,7 @@ export default function DriverDashboard({ mode = "driver" }) {
         "admin",
         `FIELD REPORT: ${type.toUpperCase()} reported near [${currPos.lat.toFixed(4)}, ${currPos.lng.toFixed(4)}]`
       );
+      markIssue(true);
 
       toast.success(
         locale === "ta"
@@ -964,25 +980,140 @@ export default function DriverDashboard({ mode = "driver" }) {
     }
   };
 
-  // Live Location Broadcaster (every 3s)
+  // Apply a control-room route override: continue from the CURRENT position along the new road route
+  applyOverrideRef.current = (ov) => {
+    const coords = ov?.route?.coords;
+    if (!Array.isArray(coords) || coords.length < 2) return;
+    const cur = currentPositionRef.current || DEPOT_PEELAMEDU;
+
+    // Start from the nearest point on the new route (never jump / never draw a straight line)
+    let nearestIdx = 0;
+    let nearestD = Infinity;
+    for (let i = 0; i < coords.length; i++) {
+      const d = haversineMeters(cur, coords[i]);
+      if (d < nearestD) {
+        nearestD = d;
+        nearestIdx = i;
+      }
+    }
+    let trimmed = coords.slice(nearestIdx);
+    if (trimmed.length < 2) trimmed = coords.slice(Math.max(0, coords.length - 2));
+
+    const distanceM = polylineLengthMeters(trimmed);
+    const fullDist = Number(ov.route.distanceM) || 0;
+    const durationS =
+      fullDist > 0 && Number(ov.route.durationS) > 0
+        ? Math.round(Number(ov.route.durationS) * (distanceM / fullDist))
+        : Math.round(distanceM / (40000 / 3600));
+
+    const route = {
+      id: ov.route.id || `override-${ov.createdAt || Date.now()}`,
+      label: "Control room",
+      coords: trimmed,
+      distanceM,
+      durationS,
+      hits: [],
+      source: "control_room",
+    };
+
+    const nextPlanned = [route, ...plannedRoutesRef.current.filter((r) => r.id !== route.id).slice(0, 2)];
+    plannedRoutesRef.current = nextPlanned;
+    setPlannedRoutes(nextPlanned);
+    setSelectedRouteIndex(0);
+    setQarsResult({
+      best: route,
+      candidates: nextPlanned,
+      baselineDelayMin: 0,
+      bestDelayMin: 0,
+      timeSavedMin: Number(ov.timeSavedMin) || 0,
+      convergence: [],
+      engine: "QPSO",
+      source: "control_room",
+      reason: ov.reason || "",
+    });
+    setMapFitBoundsCoords(trimmed);
+    markIssue(false);
+
+    const saved = Number(ov.timeSavedMin) || 0;
+    const reason = ov.reason || "Control room optimization";
+    toast.success(
+      locale === "ta"
+        ? `📡 கட்டுப்பாட்டு அறையிலிருந்து புதிய வழி — ${saved} நிமிடம் சேமிப்பு · ${reason}`
+        : `📡 New route from control room — saves ${saved} min · ${reason}`,
+      { duration: 8000 }
+    );
+    triggerHaptic([200, 100, 200]);
+    playSoftBeep();
+  };
+
+  // Subscribe to control-room route overrides (depends ONLY on uid)
+  const myUid = profile?.uid || profile?.driverId;
+  useEffect(() => {
+    if (!myUid) return;
+    const unsubscribe = subscribeRouteOverride(myUid, (ov) => {
+      if (!ov || ov.acknowledged || !ov.route) return;
+      const key = `${ov.route.id}:${ov.createdAt}`;
+      if (handledOverrideRef.current === key) return;
+      handledOverrideRef.current = key;
+      try {
+        applyOverrideRef.current?.(ov);
+      } catch (err) {
+        console.error("Apply route override error:", err);
+      }
+      acknowledgeRouteOverride(myUid).catch(() => {});
+    });
+    return () => {
+      try {
+        unsubscribe();
+      } catch (_) {}
+    };
+  }, [myUid]);
+
+  // Live Location Broadcaster (every 3s) — reads refs only, no API calls besides the live-location write
   useEffect(() => {
     const timer = setInterval(() => {
-      if (tripStatus === "in_transit" || tripStatus === "open") {
-        const currPos = currentPositionRef.current || DEPOT_PEELAMEDU;
-        const targetDel = selectedDeliveryRef.current;
-        const m = moverRef.current;
-        const speed = demoSpeedFactorRef.current || 10;
-        updateLiveLocation(profile, {
-          lat: currPos.lat,
-          lng: currPos.lng,
-          heading: currentHeadingRef.current || 0,
-          status: tripStatus,
-          destination: targetDel ? `${targetDel.code} - ${targetDel.customerName}` : null,
-          progress: m?.progress || 0,
-          etaMinutes: Math.max(1, Math.round((m?.remainingM || 0) / ((40 * 1000 / 60) * speed))),
-          remainingM: m?.remainingM || 0,
-        });
+      const currPos = currentPositionRef.current || DEPOT_PEELAMEDU;
+      const targetDel = selectedDeliveryRef.current;
+      const m = moverRef.current;
+      const speed = demoSpeedFactorRef.current || 10;
+
+      // Status: delivered > issue > at_risk (active hazard within 1 km of route) > on_time
+      let status = "on_time";
+      if (tripStatus === "delivered") {
+        status = "delivered";
+      } else if (hasIssueRef.current || tripStatus === "issue") {
+        status = "issue";
+      } else {
+        const routeCoords = activeRouteRef.current?.coords || [];
+        if (routeCoords.length > 1) {
+          const near = (hazardsRef.current || []).some(
+            (h) =>
+              h.active !== false &&
+              typeof h.lat === "number" &&
+              typeof h.lng === "number" &&
+              minDistanceToPolylineMeters({ lat: h.lat, lng: h.lng }, routeCoords) <= 1000
+          );
+          if (near) status = "at_risk";
+        }
       }
+
+      updateLiveLocation(profile, {
+        lat: currPos.lat,
+        lng: currPos.lng,
+        heading: currentHeadingRef.current || 0,
+        status,
+        destination: targetDel
+          ? {
+              lat: targetDel.lat,
+              lng: targetDel.lng,
+              label: `${targetDel.code} - ${targetDel.customerName}`,
+              deliveryId: targetDel.id,
+            }
+          : null,
+        progress: m?.progress || 0,
+        etaMinutes: Math.max(1, Math.round((m?.remainingM || 0) / ((40 * 1000 / 60) * speed))),
+        remainingM: m?.remainingM || 0,
+      });
     }, 3000);
     return () => clearInterval(timer);
   }, [tripStatus, profile]);
@@ -1072,7 +1203,7 @@ export default function DriverDashboard({ mode = "driver" }) {
         lat: currentPosition.lat,
         lng: currentPosition.lng,
         heading: currentHeading,
-        status: tripStatus === "issue" ? "issue" : tripStatus === "in_transit" ? "on_time" : "idle",
+        status: tripStatus === "delivered" ? "delivered" : (tripStatus === "issue" || hasIssue) ? "issue" : tripStatus === "in_transit" ? "on_time" : "idle",
         role: isEmergency ? "emergency" : "driver",
         isEmergency,
         priority: selectedDelivery?.priority || (isEmergency ? "medical" : "normal"),
@@ -1083,7 +1214,7 @@ export default function DriverDashboard({ mode = "driver" }) {
         etaMinutes: Math.max(1, Math.round(mover.remainingM / ((40 * 1000 / 60) * demoSpeedFactor))),
       },
     ];
-  }, [profile, currentPosition, currentHeading, tripStatus, isEmergency, selectedDelivery, activeRoute, mover.distanceCoveredM, mover.progress, mover.remainingM, demoSpeedFactor]);
+  }, [profile, currentPosition, currentHeading, tripStatus, hasIssue, isEmergency, selectedDelivery, activeRoute, mover.distanceCoveredM, mover.progress, mover.remainingM, demoSpeedFactor]);
 
 
   // Sparkline coordinates generator
@@ -1676,6 +1807,11 @@ export default function DriverDashboard({ mode = "driver" }) {
                     <span className="text-xs font-bold text-white tracking-wide">
                       Best route: {qarsResult.best?.label || "Route A"}
                     </span>
+                    {qarsResult.source === "control_room" && (
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                        Source: Control room
+                      </span>
+                    )}
                   </div>
                   <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-slate-300 border border-white/10">
                     Road data: OSM
@@ -2013,6 +2149,7 @@ export default function DriverDashboard({ mode = "driver" }) {
                   `URGENT ALERT: Driver reported hazard ${activeHazardAlert.type} at ${activeHazardAlert.distMeters}m.`
                 );
                 setTripStatus("issue");
+                markIssue(true);
                 setActiveHazardAlert(null);
                 toast.warning(locale === "ta" ? "நிறுவனத்திற்கு தகவல் அனுப்பப்பட்டது" : "Control room notified of issue");
               }}
